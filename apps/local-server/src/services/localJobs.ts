@@ -5,6 +5,7 @@ import type {
   ImageProviderMode,
   LocalFileAsset,
   LocalGenerationJobManifest,
+  LocalJobStatus,
   QualityScore,
   StyleHint,
   StyleRecipe
@@ -13,6 +14,9 @@ import { buildRecipeFromHints, validateStyleRecipe } from "@styleme/core";
 import { decodeImageInput, guessMimeFromFileName, readImageMeta, type ImageInputPayload } from "../lib/image";
 import { readJsonFile, writeJsonFile } from "../lib/json";
 import { fileUrl, localJobsRoot, projectRoot, relativeToProjectRoot } from "../lib/paths";
+
+const ORPHANED_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const ACTIVE_STATUSES = new Set<LocalJobStatus>(["queued", "running", "retrying"]);
 
 export interface CreateLocalGenerationInput {
   jobId: string;
@@ -67,7 +71,7 @@ export async function createLocalGenerationJob(
   };
   await writeManifest(jobDir, queuedManifest);
   await writeJsonFile(path.join(jobDir, "review.json"), {});
-  return runLocalGenerationJob(queuedManifest, provider);
+  return startLocalGenerationJob(queuedManifest, provider);
 }
 
 async function analyzeRecipeForGeneration(
@@ -119,7 +123,18 @@ export async function retryLocalGenerationJob(
     updatedAt: new Date().toISOString()
   };
   await writeManifest(jobDir, retryingManifest);
-  return runLocalGenerationJob(retryingManifest, provider);
+  return startLocalGenerationJob(retryingManifest, provider);
+}
+
+async function startLocalGenerationJob(
+  manifest: LocalGenerationJobManifest,
+  provider: ImageProvider
+): Promise<LocalGenerationJobManifest> {
+  const runningManifest = await markLocalGenerationRunning(manifest);
+  void runLocalGenerationJob(runningManifest, provider).catch(async (error) => {
+    await markLocalGenerationFailed(runningManifest, error);
+  });
+  return runningManifest;
 }
 
 export async function runLocalGenerationJob(
@@ -128,6 +143,56 @@ export async function runLocalGenerationJob(
 ): Promise<LocalGenerationJobManifest> {
   const jobDir = path.join(localJobsRoot, manifest.jobId);
   const outputDir = path.join(jobDir, "output");
+  const runningManifest = manifest.status === "running" ? manifest : await markLocalGenerationRunning(manifest);
+  const startedAt = runningManifest.startedAt ?? new Date().toISOString();
+
+  try {
+    const result = await provider.generatePortraits({
+      jobId: manifest.jobId,
+      mode: manifest.providerMode,
+      referenceImagePathOrUrls: manifest.referenceImages.map((asset) => path.join(projectRoot, asset.relativePath)),
+      subjectImagePathOrUrls: manifest.subjectImages.map((asset) => path.join(projectRoot, asset.relativePath)),
+      recipe: manifest.recipe,
+      count: manifest.count,
+      maxRetries: manifest.maxRetries,
+      outputDirectory: outputDir
+    });
+
+    const refreshed = await refreshLocalManifestOutputs(runningManifest);
+    const nextStatus =
+      result.status === "failed" && refreshed.outputs.length === 0
+        ? "failed"
+        : refreshed.outputs.length >= manifest.count
+          ? "succeeded"
+          : refreshed.outputs.length > 0
+            ? "partial_succeeded"
+            : result.status === "running" || result.status === "queued" || result.status === "retrying"
+              ? "failed"
+              : result.status;
+
+    const finishedAt = new Date().toISOString();
+    const nextManifest: LocalGenerationJobManifest = {
+      ...refreshed,
+      status: nextStatus,
+      finishedAt,
+      updatedAt: finishedAt,
+      durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+      ...(result.error
+        ? { error: result.error }
+        : nextStatus === "failed"
+          ? { error: "Provider 未返回输出图片。" }
+          : {})
+    };
+    await writeManifest(jobDir, nextManifest);
+    await ensureReviewFile(nextManifest);
+    return nextManifest;
+  } catch (error) {
+    return markLocalGenerationFailed(runningManifest, error);
+  }
+}
+
+async function markLocalGenerationRunning(manifest: LocalGenerationJobManifest): Promise<LocalGenerationJobManifest> {
+  const jobDir = path.join(localJobsRoot, manifest.jobId);
   const {
     error: _previousError,
     finishedAt: _previousFinishedAt,
@@ -142,36 +207,25 @@ export async function runLocalGenerationJob(
     updatedAt: startedAt
   };
   await writeManifest(jobDir, runningManifest);
+  return runningManifest;
+}
 
-  const result = await provider.generatePortraits({
-    jobId: manifest.jobId,
-    mode: manifest.providerMode,
-    referenceImagePathOrUrls: manifest.referenceImages.map((asset) => path.join(projectRoot, asset.relativePath)),
-    subjectImagePathOrUrls: manifest.subjectImages.map((asset) => path.join(projectRoot, asset.relativePath)),
-    recipe: manifest.recipe,
-    count: manifest.count,
-    maxRetries: manifest.maxRetries,
-    outputDirectory: outputDir
-  });
-
-  const refreshed = await refreshLocalManifestOutputs(runningManifest);
-  const nextStatus =
-    result.status === "failed" && refreshed.outputs.length === 0
-      ? "failed"
-      : refreshed.outputs.length >= manifest.count
-        ? "succeeded"
-        : refreshed.outputs.length > 0
-          ? "partial_succeeded"
-          : result.status;
-
+async function markLocalGenerationFailed(
+  manifest: LocalGenerationJobManifest,
+  error: unknown
+): Promise<LocalGenerationJobManifest> {
+  const jobDir = path.join(localJobsRoot, manifest.jobId);
+  const refreshed = await refreshLocalManifestOutputs(manifest);
+  if (refreshed.outputs.length > 0) return refreshed;
   const finishedAt = new Date().toISOString();
+  const durationMs = manifest.startedAt ? Math.max(0, Date.parse(finishedAt) - Date.parse(manifest.startedAt)) : undefined;
   const nextManifest: LocalGenerationJobManifest = {
     ...refreshed,
-    status: nextStatus,
+    status: "failed",
     finishedAt,
     updatedAt: finishedAt,
-    durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
-    ...(result.error ? { error: result.error } : {})
+    error: error instanceof Error ? error.message : String(error),
+    ...(durationMs !== undefined ? { durationMs } : {})
   };
   await writeManifest(jobDir, nextManifest);
   await ensureReviewFile(nextManifest);
@@ -247,27 +301,52 @@ export async function refreshLocalManifestOutputs(
     path.join(jobDir, "review.json"),
     undefined
   );
+  const orphanedError = buildOrphanedJobError(manifest, outputs.length);
   const nextStatus =
     outputs.length >= manifest.count
       ? "succeeded"
       : outputs.length > 0
         ? "partial_succeeded"
-        : manifest.status;
+        : orphanedError
+          ? "failed"
+          : manifest.status;
   const outputsChanged = JSON.stringify(outputs) !== JSON.stringify(manifest.outputs);
   const statusChanged = nextStatus !== manifest.status;
   const reviewChanged = JSON.stringify(review ?? undefined) !== JSON.stringify(manifest.review ?? undefined);
+  const now = new Date().toISOString();
+  const shouldFinalize =
+    !manifest.finishedAt &&
+    (nextStatus === "succeeded" || nextStatus === "partial_succeeded" || nextStatus === "failed");
+  const durationMs =
+    shouldFinalize && manifest.startedAt ? Math.max(0, Date.parse(now) - Date.parse(manifest.startedAt)) : undefined;
 
   const nextManifest: LocalGenerationJobManifest = {
     ...manifest,
     status: nextStatus,
-    updatedAt: outputsChanged || statusChanged || reviewChanged ? new Date().toISOString() : manifest.updatedAt,
+    updatedAt: outputsChanged || statusChanged || reviewChanged || shouldFinalize ? now : manifest.updatedAt,
     outputs,
+    ...(shouldFinalize ? { finishedAt: now } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(orphanedError
+      ? {
+          error: manifest.error ?? orphanedError,
+          finishedAt: manifest.finishedAt ?? now
+        }
+      : {}),
     ...(review ? { review } : {})
   };
-  if (outputsChanged || statusChanged || reviewChanged) {
+  if (outputsChanged || statusChanged || reviewChanged || shouldFinalize) {
     await writeManifest(jobDir, nextManifest);
   }
   return nextManifest;
+}
+
+function buildOrphanedJobError(manifest: LocalGenerationJobManifest, outputCount: number): string | undefined {
+  if (outputCount > 0 || !ACTIVE_STATUSES.has(manifest.status)) return undefined;
+  const referenceTime = Date.parse(manifest.startedAt ?? manifest.updatedAt);
+  if (!Number.isFinite(referenceTime)) return undefined;
+  if (Date.now() - referenceTime < ORPHANED_JOB_TIMEOUT_MS) return undefined;
+  return "任务超过 15 分钟没有输出，可能是本地服务重启、插件请求中断或第三方 API 长时间无响应。请重试或切换生图 API。";
 }
 
 export async function saveLocalReview(

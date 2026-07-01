@@ -51,6 +51,14 @@ import {
 } from "../src/lib/api";
 import { cropDataUrl, prepareImageFile, type PreparedImage } from "../src/lib/image";
 
+const TERMINAL_JOB_STATUSES = new Set<LocalGenerationJobManifest["status"]>([
+  "succeeded",
+  "partial_succeeded",
+  "failed",
+  "dead_letter",
+  "needs-manual-codex"
+]);
+
 interface ReferenceCandidate {
   kind: "image" | "background" | "screenshot";
   sourceUrl?: string;
@@ -296,12 +304,13 @@ function StyleMeOverlay() {
           providerMode: selectedProviderMode
         });
         setActiveJobId(result.job.jobId);
-        await loadJobs();
-        if (result.job.status === "failed") {
-          setError(result.job.error ?? "生成失败");
+        setJobs((current) => [result.job, ...current.filter((job) => job.jobId !== result.job.jobId)]);
+        const finalJob = await waitForGenerationResult(result.job.jobId);
+        if (finalJob.status === "failed" || finalJob.status === "dead_letter") {
+          setError(finalJob.error ?? "生成失败");
         } else {
-          const elapsed = result.job.durationMs ?? Date.now() - startedAt;
-          setNotice(`生成完成：${result.job.outputs.length}/${result.job.count} 张，用时 ${formatDuration(elapsed)}`);
+          const elapsed = finalJob.durationMs ?? Date.now() - startedAt;
+          setNotice(`生成完成：${finalJob.outputs.length}/${finalJob.count} 张，用时 ${formatDuration(elapsed)}`);
         }
       });
     } finally {
@@ -429,16 +438,21 @@ function StyleMeOverlay() {
   }
 
   async function handleRetryJob(jobId: string) {
+    const startedAt = Date.now();
+    setGenerationStartedAt(startedAt);
+    setNowMs(startedAt);
     await withBusy("重试生成", async () => {
       const result = await retryGeneration(jobId);
       setJobs((current) => [result.job, ...current.filter((job) => job.jobId !== jobId)]);
       setActiveJobId(result.job.jobId);
-      if (result.job.status === "failed" || result.job.status === "dead_letter") {
-        setError(result.job.error ?? "重试失败");
+      const finalJob = await waitForGenerationResult(result.job.jobId);
+      if (finalJob.status === "failed" || finalJob.status === "dead_letter") {
+        setError(finalJob.error ?? "重试失败");
       } else {
-        setNotice(`重试完成：${result.job.outputs.length}/${result.job.count} 张`);
+        setNotice(`重试完成：${finalJob.outputs.length}/${finalJob.count} 张`);
       }
     });
+    setGenerationStartedAt(null);
   }
 
   async function handleFavorite(jobId: string, output: LocalFileAsset) {
@@ -552,6 +566,17 @@ function StyleMeOverlay() {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function waitForGenerationResult(jobId: string): Promise<LocalGenerationJobManifest> {
+    let latest = await refreshJob(jobId);
+    setJobs((current) => [latest.job, ...current.filter((job) => job.jobId !== jobId)]);
+    while (!TERMINAL_JOB_STATUSES.has(latest.job.status)) {
+      await sleep(4000);
+      latest = await refreshJob(jobId);
+      setJobs((current) => [latest.job, ...current.filter((job) => job.jobId !== jobId)]);
+    }
+    return latest.job;
   }
 
   function handleCaughtError(err: unknown) {
@@ -1535,6 +1560,10 @@ function formatDateTime(value: string): string {
   const hour = String(date.getHours()).padStart(2, "0");
   const minute = String(date.getMinutes()).padStart(2, "0");
   return `${month}-${day} ${hour}:${minute}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function selectViewportRect(): Promise<{ x: number; y: number; width: number; height: number } | null> {

@@ -9,6 +9,7 @@ import type {
   StyleRecipe
 } from "@styleme/core";
 import { buildGenerationPrompt } from "@styleme/prompts";
+import { analysisRequestTimeoutMs, fetchWithTimeout, imageRequestTimeoutMs } from "../lib/fetchWithTimeout";
 import { extensionForMime, guessMimeFromFileName } from "../lib/image";
 import { buildReferenceAnalysisPrompt, parseStyleRecipeText } from "./styleAnalysis";
 
@@ -35,32 +36,36 @@ export class GeminiImagesAdapter implements ImageProvider {
       const imagePathOrUrl = imagePathOrUrls[0];
       if (!imagePathOrUrl) throw new Error("Reference image is required.");
       const image = await readImageAsBase64(imagePathOrUrl);
-      const response = await fetch(geminiGenerateContentEndpoint(this.baseUrl, this.analysisModel), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": this.apiKey
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: buildReferenceAnalysisPrompt(recipeId) },
-                {
-                  inline_data: {
-                    mime_type: image.mimeType,
-                    data: image.data
+      const response = await fetchWithTimeout(
+        geminiGenerateContentEndpoint(this.baseUrl, this.analysisModel),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-goog-api-key": this.apiKey
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  { text: buildReferenceAnalysisPrompt(recipeId) },
+                  {
+                    inline_data: {
+                      mime_type: image.mimeType,
+                      data: image.data
+                    }
                   }
-                }
-              ]
+                ]
+              }
+            ],
+            generationConfig: {
+              responseMimeType: "application/json"
             }
-          ],
-          generationConfig: {
-            responseMimeType: "application/json"
-          }
-        })
-      });
+          })
+        },
+        { timeoutMs: analysisRequestTimeoutMs(), label: "Gemini 原图分析" }
+      );
       const body = (await response.json()) as GeminiGenerateContentResponse;
       if (!response.ok) throw new Error(body.error?.message ?? `HTTP ${response.status}`);
       return parseStyleRecipeText(geminiText(body), recipeId);
@@ -81,22 +86,26 @@ export class GeminiImagesAdapter implements ImageProvider {
     let lastError: string | undefined;
 
     for (let requestIndex = 0; requestIndex < input.count && images.length < input.count; requestIndex += 1) {
-      const response = await fetch(geminiInteractionsEndpoint(this.baseUrl), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": this.apiKey
+      const response = await fetchWithTimeout(
+        geminiInteractionsEndpoint(this.baseUrl),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-goog-api-key": this.apiKey
+          },
+          body: JSON.stringify({
+            model: this.model,
+            input: [{ type: "text", text: buildGenerationPrompt(input) }, ...imageInputs],
+            response_format: {
+              type: "image",
+              mime_type: "image/png",
+              aspect_ratio: input.recipe.generationParams.aspectRatio
+            }
+          })
         },
-        body: JSON.stringify({
-          model: this.model,
-          input: [{ type: "text", text: buildGenerationPrompt(input) }, ...imageInputs],
-          response_format: {
-            type: "image",
-            mime_type: "image/png",
-            aspect_ratio: input.recipe.generationParams.aspectRatio
-          }
-        })
-      });
+        { timeoutMs: imageRequestTimeoutMs(), label: "Gemini 生图" }
+      );
       const body = (await response.json()) as GeminiInteractionResponse;
       if (!response.ok) {
         lastError = body.error?.message ?? `Gemini image generation failed: ${response.status}`;
@@ -155,30 +164,34 @@ export class CompatibleImagesApiAdapter implements ImageProvider {
       const imagePathOrUrl = imagePathOrUrls[0];
       if (!imagePathOrUrl) throw new Error("Reference image is required.");
       const imageReference = await toImageUrlReference(imagePathOrUrl);
-      const response = await fetch(chatCompletionsEndpoint(this.baseUrl), {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-          "x-title": "StyleMe Local"
+      const response = await fetchWithTimeout(
+        chatCompletionsEndpoint(this.baseUrl),
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            "content-type": "application/json",
+            "x-title": "StyleMe Local"
+          },
+          body: JSON.stringify({
+            model: this.analysisModel,
+            temperature: 0.2,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: buildReferenceAnalysisPrompt(recipeId)
+                  },
+                  imageReference
+                ]
+              }
+            ]
+          })
         },
-        body: JSON.stringify({
-          model: this.analysisModel,
-          temperature: 0.2,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: buildReferenceAnalysisPrompt(recipeId)
-                },
-                imageReference
-              ]
-            }
-          ]
-        })
-      });
+        { timeoutMs: analysisRequestTimeoutMs(), label: `${this.providerLabel} 原图分析` }
+      );
       const body = (await response.json()) as ChatCompletionsResponse;
       if (!response.ok) throw new Error(body.error?.message ?? `HTTP ${response.status}`);
       return parseStyleRecipeText(chatMessageText(body), recipeId);
@@ -202,21 +215,25 @@ export class CompatibleImagesApiAdapter implements ImageProvider {
     let lastError: string | undefined;
 
     for (let requestIndex = 0; requestIndex < input.count && images.length < input.count; requestIndex += 1) {
-      const response = await fetch(imagesEndpoint(this.baseUrl), {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-          "x-title": "StyleMe Local"
+      const response = await fetchWithTimeout(
+        imagesEndpoint(this.baseUrl),
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            "content-type": "application/json",
+            "x-title": "StyleMe Local"
+          },
+          body: JSON.stringify({
+            model: this.model,
+            prompt: buildGenerationPrompt(input),
+            aspect_ratio: input.recipe.generationParams.aspectRatio,
+            output_format: "png",
+            ...(references.length > 0 ? { input_references: references } : {})
+          })
         },
-        body: JSON.stringify({
-          model: this.model,
-          prompt: buildGenerationPrompt(input),
-          aspect_ratio: input.recipe.generationParams.aspectRatio,
-          output_format: "png",
-          ...(references.length > 0 ? { input_references: references } : {})
-        })
-      });
+        { timeoutMs: imageRequestTimeoutMs(), label: `${this.providerLabel} 生图` }
+      );
       const body = (await response.json()) as CompatibleImagesResponse;
       if (!response.ok) {
         lastError = body.error?.message ?? `${this.providerLabel} image generation failed: ${response.status}`;
@@ -344,7 +361,11 @@ async function readImageAsBase64(imagePathOrUrl: string): Promise<{ data: string
     return { mimeType: match[1], data: match[2] };
   }
   if (/^https?:\/\//.test(imagePathOrUrl)) {
-    const response = await fetch(imagePathOrUrl);
+    const response = await fetchWithTimeout(
+      imagePathOrUrl,
+      {},
+      { timeoutMs: analysisRequestTimeoutMs(), label: "读取远程输入图片" }
+    );
     if (!response.ok) throw new Error(`Could not fetch image URL: ${response.status}`);
     const mimeType = response.headers.get("content-type")?.split(";")[0] ?? guessMimeFromFileName(imagePathOrUrl);
     return {
@@ -402,7 +423,7 @@ async function saveCompatibleImage(
   }
 
   if (item.url) {
-    const response = await fetch(item.url);
+    const response = await fetchWithTimeout(item.url, {}, { timeoutMs: imageRequestTimeoutMs(), label: "下载生成图片" });
     if (!response.ok) return undefined;
     const mimeType = normalizeOutputMime(response.headers.get("content-type")?.split(";")[0]);
     if (!mimeType) return undefined;

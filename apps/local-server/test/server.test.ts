@@ -520,11 +520,12 @@ describe("local server", () => {
       };
     };
     expect(body.job.providerMode).toBe("mock");
-    expect(body.job.status).toBe("succeeded");
-    expect(body.job.durationMs).toEqual(expect.any(Number));
-    expect(body.job.outputs).toHaveLength(1);
-    expect(body.job.outputs[0]?.relativePath).toContain("runs/local-jobs/");
-    const output = body.job.outputs[0];
+    expect(body.job.status).toBe("running");
+    const finalJob = await waitForGenerationStatus(body.job.jobId, ["succeeded"]);
+    expect(finalJob.durationMs).toEqual(expect.any(Number));
+    expect(finalJob.outputs).toHaveLength(1);
+    expect(finalJob.outputs[0]?.relativePath).toContain("runs/local-jobs/");
+    const output = finalJob.outputs[0];
     if (!output) throw new Error("Missing generated output");
     const outputPath = path.join(projectRoot, output.relativePath);
     await expect(fs.access(outputPath)).resolves.toBeUndefined();
@@ -548,8 +549,8 @@ describe("local server", () => {
     };
     expect(hiddenGallery.jobs.find((job) => job.jobId === body.job.jobId)?.outputs).toHaveLength(0);
 
-    const manifestPath = path.join(projectRoot, body.job.rootDir, "manifest.json");
-    const reviewPath = path.join(projectRoot, body.job.rootDir, "review.json");
+    const manifestPath = path.join(projectRoot, finalJob.rootDir, "manifest.json");
+    const reviewPath = path.join(projectRoot, finalJob.rootDir, "review.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { outputs: unknown[] };
     const review = JSON.parse(await fs.readFile(reviewPath, "utf8")) as Record<string, unknown>;
     expect(manifest.outputs).toHaveLength(1);
@@ -561,7 +562,7 @@ describe("local server", () => {
       body: "{}"
     });
     expect(deleteJobResponse.ok).toBe(true);
-    await expect(fs.access(path.join(projectRoot, body.job.rootDir))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectRoot, finalJob.rootDir))).resolves.toBeUndefined();
 
     const finalGalleryResponse = await fetch(`${baseUrl}/v1/gallery`);
     const finalGallery = (await finalGalleryResponse.json()) as { jobs: Array<{ jobId: string }> };
@@ -864,6 +865,86 @@ describe("local server", () => {
     await deleteGenerationJob(customJob.jobId);
   });
 
+  it("fails a third-party generation instead of leaving it running when the image API times out", async () => {
+    const previousTimeout = process.env.STYLEME_IMAGE_REQUEST_TIMEOUT_MS;
+    process.env.STYLEME_IMAGE_REQUEST_TIMEOUT_MS = "20";
+    const realFetch = globalThis.fetch.bind(globalThis);
+    const dataUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lrWZ2wAAAABJRU5ErkJggg==";
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+      if (url === "https://openrouter.ai/api/v1/images") {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+      return realFetch(input, init);
+    });
+
+    try {
+      const settingsResponse = await fetch(`${baseUrl}/v1/settings/providers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          activeProvider: "third-party",
+          thirdParty: {
+            activeConfig: "openrouter",
+            openrouter: {
+              apiKey: "sk-or-timeout",
+              baseUrl: "https://openrouter.ai/api/v1",
+              model: "openai/gpt-image-2",
+              analysisModel: "qwen/qwen2.5-vl-72b-instruct"
+            }
+          }
+        })
+      });
+      expect(settingsResponse.ok).toBe(true);
+
+      const response = await fetch(`${baseUrl}/v1/generations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          reference: { dataUrl, fileName: "reference.png" },
+          subjects: [{ dataUrl, fileName: "subject.png" }],
+          source: { pageTitle: "timeout generation" },
+          recipe: outdoorReferenceRecipe("recipe_timeout_test"),
+          count: 1
+        })
+      });
+      expect(response.ok).toBe(true);
+      const body = (await response.json()) as {
+        job: {
+          jobId: string;
+          status: string;
+          providerMode: string;
+          outputs: Array<{ id: string; relativePath: string }>;
+        };
+      };
+      expect(body.job).toMatchObject({
+        providerMode: "third-party",
+        status: "running",
+        outputs: []
+      });
+
+      const failedJob = await waitForGenerationStatus(body.job.jobId, ["failed"]);
+      expect(failedJob.outputs).toHaveLength(0);
+      expect(failedJob.error).toContain("OpenRouter 生图 超时");
+      await deleteGenerationJob(body.job.jobId);
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.STYLEME_IMAGE_REQUEST_TIMEOUT_MS;
+      } else {
+        process.env.STYLEME_IMAGE_REQUEST_TIMEOUT_MS = previousTimeout;
+      }
+    }
+  });
+
   function outdoorReferenceRecipe(id: string) {
     return {
       id,
@@ -892,6 +973,36 @@ describe("local server", () => {
     };
   }
 
+  async function waitForGenerationStatus(jobId: string, statuses: string[]): Promise<{
+    jobId: string;
+    status: string;
+    providerMode: string;
+    durationMs?: number;
+    rootDir: string;
+    outputs: Array<{ id: string; relativePath: string }>;
+    error?: string;
+  }> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 3000) {
+      const response = await fetch(`${baseUrl}/v1/generations/${jobId}`);
+      expect(response.ok).toBe(true);
+      const body = (await response.json()) as {
+        job: {
+          jobId: string;
+          status: string;
+          providerMode: string;
+          durationMs?: number;
+          rootDir: string;
+          outputs: Array<{ id: string; relativePath: string }>;
+          error?: string;
+        };
+      };
+      if (statuses.includes(body.job.status)) return body.job;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Timed out waiting for generation ${jobId} to reach ${statuses.join(", ")}`);
+  }
+
   async function createThirdPartyGeneration(
     dataUrl: string,
     pageTitle: string
@@ -916,11 +1027,14 @@ describe("local server", () => {
       };
     };
     expect(body.job.providerMode).toBe("third-party");
-    expect(body.job.outputs).toHaveLength(1);
-    const output = body.job.outputs[0];
+    expect(body.job.status).toBe("running");
+    const finalJob = await waitForGenerationStatus(body.job.jobId, ["succeeded"]);
+    expect(finalJob.providerMode).toBe("third-party");
+    expect(finalJob.outputs).toHaveLength(1);
+    const output = finalJob.outputs[0];
     if (!output) throw new Error("Missing third-party output");
     await expect(fs.access(path.join(projectRoot, output.relativePath))).resolves.toBeUndefined();
-    return body.job;
+    return finalJob;
   }
 
   async function deleteGenerationJob(jobId: string): Promise<void> {

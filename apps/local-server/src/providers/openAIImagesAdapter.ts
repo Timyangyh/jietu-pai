@@ -9,6 +9,7 @@ import type {
   StyleRecipe
 } from "@styleme/core";
 import { buildGenerationPrompt } from "@styleme/prompts";
+import { analysisRequestTimeoutMs, fetchWithTimeout, imageRequestTimeoutMs } from "../lib/fetchWithTimeout";
 import { guessMimeFromFileName } from "../lib/image";
 import { buildReferenceAnalysisPrompt, parseStyleRecipeText } from "./styleAnalysis";
 
@@ -34,26 +35,30 @@ export class OpenAIImagesAdapter implements ImageProvider {
 
     const recipeId = `recipe_openai_${Date.now()}`;
     const imageUrl = await readImageDataUrl(imagePathOrUrl);
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        "content-type": "application/json"
+    const response = await fetchWithTimeout(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model: this.analysisModel,
+          input: [
+            {
+              role: "user",
+              content: [
+                { type: "input_text", text: buildReferenceAnalysisPrompt(recipeId) },
+                { type: "input_image", image_url: imageUrl }
+              ]
+            }
+          ],
+          temperature: 0.2
+        })
       },
-      body: JSON.stringify({
-        model: this.analysisModel,
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: buildReferenceAnalysisPrompt(recipeId) },
-              { type: "input_image", image_url: imageUrl }
-            ]
-          }
-        ],
-        temperature: 0.2
-      })
-    });
+      { timeoutMs: analysisRequestTimeoutMs(), label: "OpenAI 原图分析" }
+    );
     const body = (await response.json()) as OpenAIResponsesResponse;
     if (!response.ok) {
       throw new Error(body.error?.message ?? `OpenAI reference analysis failed: ${response.status}`);
@@ -94,13 +99,17 @@ export class OpenAIImagesAdapter implements ImageProvider {
       form.append("image[]", file.blob, file.fileName);
     }
 
-    const response = await fetch("https://api.openai.com/v1/images/edits", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.apiKey}`
+    const response = await fetchWithTimeout(
+      "https://api.openai.com/v1/images/edits",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.apiKey}`
+        },
+        body: form
       },
-      body: form
-    });
+      { timeoutMs: imageRequestTimeoutMs(), label: "OpenAI 生图" }
+    );
     const body = (await response.json()) as OpenAIImagesResponse;
     if (!response.ok) {
       return {
@@ -118,7 +127,7 @@ export class OpenAIImagesAdapter implements ImageProvider {
       if (item.b64_json) {
         await fs.writeFile(outputPath, Buffer.from(item.b64_json, "base64"));
       } else if (item.url) {
-        const imageResponse = await fetch(item.url);
+        const imageResponse = await fetchWithTimeout(item.url, {}, { timeoutMs: imageRequestTimeoutMs(), label: "下载 OpenAI 图片" });
         if (!imageResponse.ok) continue;
         await fs.writeFile(outputPath, Buffer.from(await imageResponse.arrayBuffer()));
       } else {
@@ -207,7 +216,11 @@ function openAIResponseText(body: OpenAIResponsesResponse): string {
 async function readImageDataUrl(imagePathOrUrl: string): Promise<string> {
   if (imagePathOrUrl.startsWith("data:image/")) return imagePathOrUrl;
   if (/^https?:\/\//.test(imagePathOrUrl)) {
-    const response = await fetch(imagePathOrUrl);
+    const response = await fetchWithTimeout(
+      imagePathOrUrl,
+      {},
+      { timeoutMs: analysisRequestTimeoutMs(), label: "读取 OpenAI 远程分析图片" }
+    );
     if (!response.ok) throw new Error(`Could not fetch image URL for OpenAI analysis: ${response.status}`);
     const mimeType = response.headers.get("content-type")?.split(";")[0] ?? guessMimeFromFileName(imagePathOrUrl);
     const data = Buffer.from(await response.arrayBuffer()).toString("base64");
@@ -219,7 +232,11 @@ async function readImageDataUrl(imagePathOrUrl: string): Promise<string> {
 
 async function readImageBlob(imagePathOrUrl: string): Promise<{ blob: Blob; fileName: string }> {
   if (/^https?:\/\//.test(imagePathOrUrl)) {
-    const response = await fetch(imagePathOrUrl);
+    const response = await fetchWithTimeout(
+      imagePathOrUrl,
+      {},
+      { timeoutMs: analysisRequestTimeoutMs(), label: "读取 OpenAI 远程输入图片" }
+    );
     if (!response.ok) throw new Error(`Could not fetch image URL for OpenAI input: ${response.status}`);
     const mimeType = response.headers.get("content-type")?.split(";")[0] ?? "image/png";
     return {
