@@ -1,0 +1,28 @@
+{
+  "name": "styleme-local",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:server": "pnpm --filter @styleme/local-server dev",
+    "start:server": "pnpm --filter @styleme/local-server start",
+    "dev:extension": "pnpm --filter @styleme/extension dev",
+    "build:extension": "pnpm --filter @styleme/extension build && tsx scripts/sync-extension-build.ts",
+    "package:extension": "pnpm build:extension && tsx scripts/package-extension.ts",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "verify": "pnpm typecheck && pnpm test && pnpm build:extension",
+    "smoke:server": "pnpm --filter @styleme/local-server smoke",
+    "verify:ui": "pnpm build:extension && tsx scripts/verify-extension-ui.ts"
+  },
+  "dependencies": {
+    "@styleme/core": "workspace:*",
+    "@styleme/prompts": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^22.15.33",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

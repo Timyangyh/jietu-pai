@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>懒加载图片夹具</title>
+    <style>
+      body {
+        min-height: 120vh;
+        margin: 0;
+        padding: 32px;
+        font-family: system-ui, sans-serif;
+      }
+      img {
+        width: 340px;
+        aspect-ratio: 4 / 5;
+        object-fit: cover;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>懒加载图片</h1>
+    <img
+      loading="lazy"
+      alt="cafe warm light portrait"
+      src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='500'%3E%3Crect width='400' height='500' fill='%23d9b48f'/%3E%3Crect x='40' y='60' width='320' height='120' fill='%23fff0c2'/%3E%3Ccircle cx='202' cy='230' r='70' fill='%23edc0a2'/%3E%3Crect x='125' y='315' width='160' height='130' rx='30' fill='%236b4d3a'/%3E%3C/svg%3E"
+    />
+  </body>
+</html>

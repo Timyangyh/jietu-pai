@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>截图兜底夹具</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 32px;
+        font-family: system-ui, sans-serif;
+      }
+      canvas {
+        border: 1px solid #ddd;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Canvas 只能截图</h1>
+    <canvas id="photo" width="400" height="500"></canvas>
+    <script>
+      const canvas = document.getElementById("photo");
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#1d2733";
+      ctx.fillRect(0, 0, 400, 500);
+      ctx.fillStyle = "#f6c4a6";
+      ctx.beginPath();
+      ctx.arc(205, 190, 72, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#f4f0dc";
+      ctx.fillRect(110, 290, 180, 140);
+    </script>
+  </body>
+</html>
