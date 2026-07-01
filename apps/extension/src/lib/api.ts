@@ -152,6 +152,13 @@ export async function listJobs(): Promise<{ jobs: LocalGenerationJobManifest[] }
   return request("/v1/gallery");
 }
 
+export async function clearGalleryHistory(jobIds: string[]): Promise<{ deletedJobs: number; deletedOutputs: number }> {
+  return request("/v1/gallery/clear", {
+    method: "POST",
+    body: JSON.stringify({ jobIds })
+  });
+}
+
 export async function refreshJob(jobId: string): Promise<{ job: LocalGenerationJobManifest }> {
   return request(`/v1/generations/${encodeURIComponent(jobId)}`);
 }

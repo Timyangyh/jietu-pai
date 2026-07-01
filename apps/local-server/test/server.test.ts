@@ -5,10 +5,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type http from "node:http";
 import { createStyleMeServer } from "../src/server";
 import { projectEnvPath } from "../src/lib/env";
-import { localLibraryRoot, projectRoot } from "../src/lib/paths";
+import { localJobsRoot, localLibraryRoot, projectRoot } from "../src/lib/paths";
 
 let server: http.Server;
 let baseUrl: string;
+let initialLocalJobDirs = new Set<string>();
 const restoreFiles = [
   ...["provider-settings.json", "gallery.json"].map((fileName) => path.join(localLibraryRoot, fileName)),
   projectEnvPath
@@ -16,6 +17,7 @@ const restoreFiles = [
 const fileSnapshots = new Map<string, string | undefined>();
 
 beforeAll(async () => {
+  initialLocalJobDirs = await listDirectoryNames(localJobsRoot);
   for (const filePath of restoreFiles) {
     try {
       fileSnapshots.set(filePath, await fs.readFile(filePath, "utf8"));
@@ -35,6 +37,7 @@ beforeAll(async () => {
 afterAll(async () => {
   server.close();
   await once(server, "close");
+  await removeNewLocalJobDirs(initialLocalJobDirs);
   for (const [filePath, snapshot] of fileSnapshots.entries()) {
     if (snapshot === undefined) {
       await fs.rm(filePath, { force: true });
@@ -48,6 +51,25 @@ afterAll(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+async function listDirectoryNames(root: string): Promise<Set<string>> {
+  try {
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    return new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+    throw error;
+  }
+}
+
+async function removeNewLocalJobDirs(initialDirs: Set<string>): Promise<void> {
+  const currentDirs = await listDirectoryNames(localJobsRoot);
+  await Promise.all(
+    [...currentDirs]
+      .filter((directory) => !initialDirs.has(directory))
+      .map((directory) => fs.rm(path.join(localJobsRoot, directory), { recursive: true, force: true }))
+  );
+}
 
 describe("local server", () => {
   it("returns local service health status", async () => {
@@ -567,6 +589,55 @@ describe("local server", () => {
     const finalGalleryResponse = await fetch(`${baseUrl}/v1/gallery`);
     const finalGallery = (await finalGalleryResponse.json()) as { jobs: Array<{ jobId: string }> };
     expect(finalGallery.jobs.some((job) => job.jobId === body.job.jobId)).toBe(false);
+  });
+
+  it("clears selected gallery history jobs without deleting local files", async () => {
+    const dataUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lrWZ2wAAAABJRU5ErkJggg==";
+    const providersResponse = await fetch(`${baseUrl}/v1/settings/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ activeProvider: "mock" })
+    });
+    expect(providersResponse.ok).toBe(true);
+
+    const response = await fetch(`${baseUrl}/v1/generations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        reference: { dataUrl, fileName: "reference.png" },
+        subjects: [{ dataUrl, fileName: "subject.png" }],
+        source: { pageTitle: "history cleanup" },
+        count: 1
+      })
+    });
+    expect(response.ok).toBe(true);
+    const body = (await response.json()) as {
+      job: {
+        jobId: string;
+        rootDir: string;
+      };
+    };
+    const finalJob = await waitForGenerationStatus(body.job.jobId, ["succeeded"]);
+    const output = finalJob.outputs[0];
+    if (!output) throw new Error("Missing generated output");
+    const outputPath = path.join(projectRoot, output.relativePath);
+    await expect(fs.access(outputPath)).resolves.toBeUndefined();
+
+    const clearResponse = await fetch(`${baseUrl}/v1/gallery/clear`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobIds: [body.job.jobId] })
+    });
+    expect(clearResponse.ok).toBe(true);
+    const clearBody = (await clearResponse.json()) as { deletedJobs: number; deletedOutputs: number };
+    expect(clearBody).toMatchObject({ deletedJobs: 1, deletedOutputs: 1 });
+
+    const galleryResponse = await fetch(`${baseUrl}/v1/gallery`);
+    expect(galleryResponse.ok).toBe(true);
+    const gallery = (await galleryResponse.json()) as { jobs: Array<{ jobId: string }> };
+    expect(gallery.jobs.some((job) => job.jobId === body.job.jobId)).toBe(false);
+    await expect(fs.access(path.join(projectRoot, finalJob.rootDir))).resolves.toBeUndefined();
   });
 
   it("switches between configured third-party providers and generates through the selected API", async () => {

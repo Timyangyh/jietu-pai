@@ -28,6 +28,7 @@ import { browser } from "wxt/browser";
 import {
   absoluteLocalUrl,
   analyzeRecipe,
+  clearGalleryHistory,
   createCodexJob,
   createGeneration,
   deleteJob,
@@ -501,6 +502,21 @@ function StyleMeOverlay() {
     });
   }
 
+  async function handleClearGalleryHistory() {
+    if (jobs.length === 0) return;
+    const confirmed = window.confirm(`清空 ${jobs.length} 个历史任务？插件相册会隐藏这些任务，本地目录保留。`);
+    if (!confirmed) return;
+
+    await withBusy("清空历史", async () => {
+      const result = await clearGalleryHistory(jobs.map((job) => job.jobId));
+      setPreview(null);
+      setActiveJobId(null);
+      setJobs([]);
+      await loadJobs();
+      setNotice(`已清空 ${result.deletedJobs} 个历史任务`);
+    });
+  }
+
   async function handleDownload(job: LocalGenerationJobManifest, output: LocalFileAsset) {
     const url = absoluteLocalUrl(output.url ?? "");
     const filename = `styleme/${job.createdAt.slice(0, 10)}-${safeFileName(job.title)}-${output.id}${extensionFromFile(output.fileName)}`;
@@ -905,9 +921,20 @@ function StyleMeOverlay() {
             <div className="styleme-section-title">
               <BadgeCheck size={16} />
               <span>相册</span>
-              <button className="styleme-mini" type="button" onClick={loadJobs} title="刷新相册">
-                <RefreshCw size={14} />
-              </button>
+              <div className="styleme-title-actions">
+                <button className="styleme-mini" type="button" onClick={loadJobs} title="刷新相册">
+                  <RefreshCw size={14} />
+                </button>
+                <button
+                  className="styleme-mini danger"
+                  type="button"
+                  disabled={jobs.length === 0 || Boolean(busy)}
+                  onClick={handleClearGalleryHistory}
+                  title="清空历史图片"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
             {activeJob ? (
               <>

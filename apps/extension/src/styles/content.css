@@ -168,6 +168,17 @@
   margin-left: auto;
 }
 
+.styleme-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.styleme-title-actions .styleme-mini {
+  margin-left: 0;
+}
+
 .styleme-job-tools .styleme-mini,
 .styleme-history-list .styleme-mini {
   margin-left: 0;

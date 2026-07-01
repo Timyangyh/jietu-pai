@@ -92,6 +92,11 @@ interface ReviewRequest {
   scores: Record<string, QualityScore>;
 }
 
+interface ClearGalleryRequest {
+  jobIds?: string[];
+  providerMode?: ImageProviderMode;
+}
+
 export function createStyleMeServer(_options: CreateStyleMeServerOptions = {}): http.Server {
   return http.createServer(async (request, response) => {
     setCorsHeaders(request, response);
@@ -238,6 +243,11 @@ async function route(request: IncomingMessage, url: URL): Promise<unknown> {
   const jobDeleteMatch = url.pathname.match(/^\/v1\/jobs\/([^/]+)\/delete-job$/);
   if (method === "POST" && jobDeleteMatch?.[1]) {
     return deleteDebugJob(jobDeleteMatch[1]);
+  }
+
+  if (method === "POST" && url.pathname === "/v1/gallery/clear") {
+    const body = await readJsonBody<ClearGalleryRequest>(request);
+    return clearGalleryHistory(body);
   }
 
   if (method === "GET" && url.pathname === "/v1/gallery") {
@@ -536,6 +546,52 @@ async function setDeletedJob(jobId: string, deleted: boolean): Promise<unknown> 
   gallery.updatedAt = new Date().toISOString();
   await writeJsonFile(galleryPath, gallery);
   return { ok: true, deleted };
+}
+
+async function clearGalleryHistory(body: ClearGalleryRequest): Promise<unknown> {
+  const gallery = await readGallery();
+  const localJobs = await listLocalManifests();
+  const codexJobs = await listCodexManifests();
+  const requestedJobIds = body.jobIds?.filter(Boolean);
+  const requested = requestedJobIds?.length ? [...new Set(requestedJobIds)] : undefined;
+  const allJobs = [...localJobs, ...codexJobs];
+  const jobsById = new Map(allJobs.map((job) => [job.jobId, job]));
+  const candidates: Array<{ jobId: string; outputs: LocalFileAsset[]; providerMode?: ImageProviderMode }> = requested
+    ? requested
+        .map((jobId) => {
+          const job = jobsById.get(jobId);
+          return job
+            ? { jobId: job.jobId, outputs: job.outputs, providerMode: job.providerMode }
+            : { jobId, outputs: [] };
+        })
+        .filter((job) => !body.providerMode || !job.providerMode || job.providerMode === body.providerMode)
+    : allJobs
+        .filter((job) => gallery.deletedJobs?.[job.jobId] !== true && (!body.providerMode || job.providerMode === body.providerMode))
+        .map((job) => ({ jobId: job.jobId, outputs: job.outputs, providerMode: job.providerMode }));
+
+  gallery.deletedJobs = gallery.deletedJobs ?? {};
+  let deletedOutputs = 0;
+  let deletedJobs = 0;
+  for (const job of candidates) {
+    if (gallery.deletedJobs[job.jobId] === true) continue;
+    gallery.deletedJobs[job.jobId] = true;
+    deletedJobs += 1;
+    deletedOutputs += job.outputs.length;
+    for (const key of Object.keys(gallery.favorites)) {
+      if (key.startsWith(`${job.jobId}/`)) delete gallery.favorites[key];
+    }
+    for (const key of Object.keys(gallery.deleted)) {
+      if (key.startsWith(`${job.jobId}/`)) delete gallery.deleted[key];
+    }
+  }
+
+  gallery.updatedAt = new Date().toISOString();
+  await writeJsonFile(galleryPath, gallery);
+  return {
+    ok: true,
+    deletedJobs,
+    deletedOutputs
+  };
 }
 
 async function buildGalleryResponse(): Promise<unknown> {

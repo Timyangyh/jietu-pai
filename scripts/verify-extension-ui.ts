@@ -20,6 +20,7 @@ await ensureSubjectFixture(subjectFixturePath);
 
 const localServer = await startLocalApiIfNeeded();
 const originalProviders = await getActiveProvidersForVerification();
+const originalGalleryJobIds = await getVisibleGalleryJobIds();
 await configureMockProviders();
 
 const fixtureServer = createFixtureServer(fixtureRoot);
@@ -69,6 +70,7 @@ try {
     )
   );
 } finally {
+  await cleanupVerificationJobs(originalGalleryJobIds);
   await restoreActiveProviders(originalProviders);
   await context?.close();
   fixtureServer.close();
@@ -144,6 +146,61 @@ async function restoreActiveProviders(providers: { activeProvider: string; activ
   } catch {
     // Verification cleanup should not mask the UI failure that may already be in flight.
   }
+}
+
+async function getVisibleGalleryJobIds(): Promise<Set<string>> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${localApiPort}/v1/gallery`);
+    if (!response.ok) return new Set();
+    const body = (await response.json()) as { jobs?: Array<{ jobId?: string }> };
+    return new Set((body.jobs ?? []).map((job) => job.jobId).filter((jobId): jobId is string => Boolean(jobId)));
+  } catch {
+    return new Set();
+  }
+}
+
+async function cleanupVerificationJobs(originalJobIds: Set<string>): Promise<void> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${localApiPort}/v1/gallery`);
+    if (!response.ok) return;
+    const body = (await response.json()) as {
+      jobs?: Array<{ jobId?: string; providerMode?: string; rootDir?: string }>;
+    };
+    const newMockJobs = (body.jobs ?? []).filter(
+      (job) => job.jobId && !originalJobIds.has(job.jobId) && job.providerMode === "mock"
+    );
+    const newMockJobIds = newMockJobs.map((job) => job.jobId as string);
+    if (newMockJobIds.length === 0) return;
+
+    const clearResponse = await fetch(`http://127.0.0.1:${localApiPort}/v1/gallery/clear`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jobIds: newMockJobIds })
+    });
+    if (!clearResponse.ok) {
+      await Promise.allSettled(
+        newMockJobIds.map((jobId) =>
+          fetch(`http://127.0.0.1:${localApiPort}/v1/generations/${encodeURIComponent(jobId)}/delete-job`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}"
+          })
+        )
+      );
+    }
+
+    await Promise.allSettled(newMockJobs.map((job) => removeVerificationJobDirectory(job.rootDir)));
+  } catch {
+    // Verification cleanup should not mask the UI failure that may already be in flight.
+  }
+}
+
+async function removeVerificationJobDirectory(rootDir: string | undefined): Promise<void> {
+  if (!rootDir) return;
+  const localJobsRoot = path.join(projectRoot, "runs", "local-jobs");
+  const jobRoot = path.resolve(projectRoot, rootDir);
+  if (!jobRoot.startsWith(`${localJobsRoot}${path.sep}`)) return;
+  await fs.rm(jobRoot, { recursive: true, force: true });
 }
 
 async function setActiveProviders(providers: { activeProvider: string; activeAnalysisProvider: string }): Promise<void> {
