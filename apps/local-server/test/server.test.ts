@@ -96,8 +96,10 @@ describe("local server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         activeProvider: "third-party",
+        activeAnalysisProvider: "third-party",
         thirdParty: {
           activeConfig: "openrouter",
+          activeAnalysisConfig: "openrouter",
           openrouter: {
             apiKey: "sk-or-test",
             baseUrl: "https://openrouter.ai/api/v1",
@@ -149,6 +151,69 @@ describe("local server", () => {
       enabled: true,
       analysisModel: "qwen/qwen2.5-vl-72b-instruct"
     });
+  });
+
+  it("allows unconfigured API providers to be selected for setup", async () => {
+    const response = await fetch(`${baseUrl}/v1/settings/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        activeProvider: "openai-api",
+        activeAnalysisProvider: "third-party",
+        thirdParty: {
+          activeConfig: "custom",
+          activeAnalysisConfig: "custom",
+          custom: {
+            clearApiKey: true,
+            baseUrl: "",
+            model: ""
+          }
+        }
+      })
+    });
+    expect(response.ok).toBe(true);
+    const body = (await response.json()) as {
+      activeProvider: string;
+      activeAnalysisProvider: string;
+      providers: Array<{
+        mode: string;
+        active: boolean;
+        analysisActive: boolean;
+        enabled: boolean;
+        analysisEnabled: boolean;
+        status: string;
+      }>;
+      thirdPartyProviders: Array<{
+        key: string;
+        activeForGeneration: boolean;
+        activeForAnalysis: boolean;
+        generationEnabled: boolean;
+        analysisEnabled: boolean;
+      }>;
+    };
+    expect(body.activeProvider).toBe("openai-api");
+    expect(body.activeAnalysisProvider).toBe("third-party");
+    expect(body.providers.find((provider) => provider.mode === "openai-api")).toMatchObject({
+      active: true,
+      enabled: false,
+      status: "needs_config"
+    });
+    expect(body.providers.find((provider) => provider.mode === "third-party")).toMatchObject({
+      analysisActive: true,
+      analysisEnabled: false,
+      status: "needs_config"
+    });
+    expect(body.thirdPartyProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "custom",
+          activeForGeneration: true,
+          activeForAnalysis: true,
+          generationEnabled: false,
+          analysisEnabled: false
+        })
+      ])
+    );
   });
 
   it("only serves generated image files through the local media endpoint", async () => {
@@ -273,8 +338,10 @@ describe("local server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         activeProvider: "third-party",
+        activeAnalysisProvider: "third-party",
         thirdParty: {
           activeConfig: "openrouter",
+          activeAnalysisConfig: "openrouter",
           openrouter: {
             apiKey: "sk-or-test",
             baseUrl: "https://openrouter.ai/api/v1",
@@ -324,8 +391,10 @@ describe("local server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         activeProvider: "third-party",
+        activeAnalysisProvider: "third-party",
         thirdParty: {
           activeConfig: "openrouter",
+          activeAnalysisConfig: "openrouter",
           openrouter: {
             apiKey: "sk-or-test",
             baseUrl: "https://openrouter.ai/api/v1",
@@ -386,8 +455,10 @@ describe("local server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         activeProvider: "third-party",
+        activeAnalysisProvider: "third-party",
         thirdParty: {
           activeConfig: "openrouter",
+          activeAnalysisConfig: "openrouter",
           openrouter: {
             apiKey: "sk-or-test",
             baseUrl: "https://openrouter.ai/api/v1",
@@ -611,8 +682,10 @@ describe("local server", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         activeProvider: "third-party",
+        activeAnalysisProvider: "third-party",
         thirdParty: {
           activeConfig: "geminiNanoBanana",
+          activeAnalysisConfig: "geminiNanoBanana",
           geminiNanoBanana: {
             apiKey: "gemini-test-key",
             baseUrl: "https://generativelanguage.googleapis.com",
@@ -636,9 +709,21 @@ describe("local server", () => {
     });
     expect(settingsResponse.ok).toBe(true);
     const settings = (await settingsResponse.json()) as {
+      activeProvider: string;
+      activeAnalysisProvider: string;
       providers: Array<{ mode: string; enabled: boolean; status: string; model?: string; keySource?: string }>;
-      thirdPartyProviders: Array<{ key: string; enabled: boolean; status: string; detail: string }>;
+      thirdPartyProviders: Array<{
+        key: string;
+        enabled: boolean;
+        analysisEnabled: boolean;
+        activeForGeneration: boolean;
+        activeForAnalysis: boolean;
+        status: string;
+        detail: string;
+      }>;
     };
+    expect(settings.activeProvider).toBe("third-party");
+    expect(settings.activeAnalysisProvider).toBe("third-party");
     expect(settings.providers.find((provider) => provider.mode === "third-party")).toMatchObject({
       enabled: true,
       status: "available",
@@ -647,9 +732,16 @@ describe("local server", () => {
     });
     expect(settings.thirdPartyProviders).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ key: "geminiNanoBanana", enabled: true, status: "available" }),
-        expect.objectContaining({ key: "openrouter", enabled: true, status: "available" }),
-        expect.objectContaining({ key: "custom", enabled: true, status: "available" })
+        expect.objectContaining({
+          key: "geminiNanoBanana",
+          enabled: true,
+          analysisEnabled: true,
+          activeForGeneration: true,
+          activeForAnalysis: true,
+          status: "available"
+        }),
+        expect.objectContaining({ key: "openrouter", enabled: true, analysisEnabled: true, status: "available" }),
+        expect.objectContaining({ key: "custom", enabled: true, analysisEnabled: true, status: "available" })
       ])
     );
 
@@ -697,6 +789,26 @@ describe("local server", () => {
       })
     });
     expect(openRouterSettingsResponse.ok).toBe(true);
+    const openRouterGenerationSettings = (await openRouterSettingsResponse.json()) as {
+      thirdPartyProviders: Array<{ key: string; activeForGeneration: boolean; activeForAnalysis: boolean }>;
+    };
+    expect(openRouterGenerationSettings.thirdPartyProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "openrouter", activeForGeneration: true, activeForAnalysis: false }),
+        expect.objectContaining({ key: "geminiNanoBanana", activeForGeneration: false, activeForAnalysis: true })
+      ])
+    );
+    const openRouterAnalysisSettingsResponse = await fetch(`${baseUrl}/v1/settings/providers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        activeAnalysisProvider: "third-party",
+        thirdParty: {
+          activeAnalysisConfig: "openrouter"
+        }
+      })
+    });
+    expect(openRouterAnalysisSettingsResponse.ok).toBe(true);
     const openRouterAnalysisResponse = await fetch(`${baseUrl}/v1/recipes/analyze`, {
       method: "POST",
       headers: { "content-type": "application/json" },

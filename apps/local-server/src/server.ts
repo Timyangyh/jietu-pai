@@ -46,6 +46,7 @@ import {
 } from "./services/localJobs";
 import {
   getOpenAIApiKey,
+  getOpenAIAnalysisModel,
   getOpenAIModel,
   getEffectiveThirdPartyProviderKey,
   getThirdPartyApiConfig,
@@ -125,7 +126,8 @@ async function route(request: IncomingMessage, url: URL): Promise<unknown> {
       projectRoot,
       runsRoot,
       hasOpenAIKey: Boolean(openaiKey.apiKey),
-      activeProvider: settings.activeProvider
+      activeProvider: settings.activeProvider,
+      activeAnalysisProvider: settings.activeAnalysisProvider
     };
   }
 
@@ -259,7 +261,7 @@ async function analyzeReference(body: AnalyzeRequest): Promise<unknown> {
   await fs.writeFile(referencePath, decoded.buffer);
 
   const settings = await readProviderSettings();
-  const providerMode = body.providerMode ?? settings.activeProvider;
+  const providerMode = body.providerMode ?? settings.activeAnalysisProvider;
   const recipe =
     providerMode === "mock" || providerMode === "codex-dev"
       ? buildRecipeFromHints(
@@ -271,7 +273,7 @@ async function analyzeReference(body: AnalyzeRequest): Promise<unknown> {
             sourceUrl: body.reference.sourceUrl
           })
         )
-      : await createProvider(providerMode, settings).analyzeStyle([referencePath]);
+      : await createProvider(providerMode, settings, "analysis").analyzeStyle([referencePath]);
   if (!validateStyleRecipe(recipe)) {
     throw new HttpError(500, "Provider returned an invalid StyleRecipe");
   }
@@ -343,7 +345,7 @@ async function createGeneration(body: CreateJobRequest): Promise<unknown> {
 
   const settings = await readProviderSettings();
   const providerMode = body.providerMode ?? settings.activeProvider;
-  const provider = createProvider(providerMode, settings);
+  const provider = createProvider(providerMode, settings, "generation");
   const job = await createLocalGenerationJob(
     {
       jobId: createJobId(),
@@ -367,7 +369,7 @@ async function createGeneration(body: CreateJobRequest): Promise<unknown> {
 async function retryGeneration(jobId: string): Promise<unknown> {
   const manifest = await readLocalManifest(jobId);
   const settings = await readProviderSettings();
-  const provider = createProvider(manifest.providerMode, settings);
+  const provider = createProvider(manifest.providerMode, settings, "generation");
   return {
     ok: true,
     job: await retryLocalGenerationJob(jobId, provider)
@@ -381,18 +383,23 @@ async function saveGenerationReview(jobId: string, body: ReviewRequest): Promise
   };
 }
 
-function createProvider(mode: ImageProviderMode, settings: RawProviderSettings): ImageProvider {
+function createProvider(
+  mode: ImageProviderMode,
+  settings: RawProviderSettings,
+  usage: "generation" | "analysis" = "generation"
+): ImageProvider {
   if (mode === "mock") return new MockImageProvider();
   if (mode === "openai-api") {
     const openaiKey = getOpenAIApiKey(settings);
     return new OpenAIImagesAdapter({
       model: getOpenAIModel(settings),
+      analysisModel: getOpenAIAnalysisModel(settings),
       ...(openaiKey.apiKey ? { apiKey: openaiKey.apiKey } : {})
     });
   }
   if (mode === "codex-account") return new CodexAccountProvider();
   if (mode === "codex-dev") return createUnavailableProvider("Codex 调试模式只创建任务包，请使用高级调试入口。");
-  const activeThirdParty = getEffectiveThirdPartyProviderKey(settings);
+  const activeThirdParty = getEffectiveThirdPartyProviderKey(settings, usage);
   const config = getThirdPartyApiConfig(settings, activeThirdParty);
   if (activeThirdParty === "geminiNanoBanana") {
     return new GeminiImagesAdapter({

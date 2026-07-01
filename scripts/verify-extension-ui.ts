@@ -19,8 +19,8 @@ await ensureExtensionBuild(extensionPath);
 await ensureSubjectFixture(subjectFixturePath);
 
 const localServer = await startLocalApiIfNeeded();
-const originalActiveProvider = await getActiveProviderForVerification();
-await configureMockProvider();
+const originalProviders = await getActiveProvidersForVerification();
+await configureMockProviders();
 
 const fixtureServer = createFixtureServer(fixtureRoot);
 fixtureServer.listen(fixturePort, "127.0.0.1");
@@ -69,7 +69,7 @@ try {
     )
   );
 } finally {
-  await restoreActiveProvider(originalActiveProvider);
+  await restoreActiveProviders(originalProviders);
   await context?.close();
   fixtureServer.close();
   if (localServer) localServer.close();
@@ -124,30 +124,33 @@ async function startLocalApiIfNeeded(): Promise<http.Server | undefined> {
   }
 }
 
-async function configureMockProvider(): Promise<void> {
-  await setActiveProvider("mock");
+async function configureMockProviders(): Promise<void> {
+  await setActiveProviders({ activeProvider: "mock", activeAnalysisProvider: "mock" });
 }
 
-async function getActiveProviderForVerification(): Promise<string> {
+async function getActiveProvidersForVerification(): Promise<{ activeProvider: string; activeAnalysisProvider: string }> {
   const response = await fetch(`http://127.0.0.1:${localApiPort}/v1/settings/providers`);
-  if (!response.ok) return "mock";
-  const body = (await response.json()) as { activeProvider?: string };
-  return body.activeProvider ?? "mock";
+  if (!response.ok) return { activeProvider: "mock", activeAnalysisProvider: "mock" };
+  const body = (await response.json()) as { activeProvider?: string; activeAnalysisProvider?: string };
+  return {
+    activeProvider: body.activeProvider ?? "mock",
+    activeAnalysisProvider: body.activeAnalysisProvider ?? body.activeProvider ?? "mock"
+  };
 }
 
-async function restoreActiveProvider(activeProvider: string): Promise<void> {
+async function restoreActiveProviders(providers: { activeProvider: string; activeAnalysisProvider: string }): Promise<void> {
   try {
-    await setActiveProvider(activeProvider);
+    await setActiveProviders(providers);
   } catch {
     // Verification cleanup should not mask the UI failure that may already be in flight.
   }
 }
 
-async function setActiveProvider(activeProvider: string): Promise<void> {
+async function setActiveProviders(providers: { activeProvider: string; activeAnalysisProvider: string }): Promise<void> {
   const response = await fetch(`http://127.0.0.1:${localApiPort}/v1/settings/providers`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ activeProvider })
+    body: JSON.stringify(providers)
   });
   if (!response.ok) {
     throw new Error(`Could not set provider for UI verification: ${response.status}`);

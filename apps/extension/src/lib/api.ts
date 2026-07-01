@@ -23,18 +23,23 @@ export interface HealthResponse {
   runsRoot: string;
   hasOpenAIKey: boolean;
   activeProvider: ImageProviderMode;
+  activeAnalysisProvider?: ImageProviderMode;
 }
 
 export interface ProviderSummary {
   mode: ImageProviderMode;
   label: string;
   active: boolean;
+  analysisActive: boolean;
   enabled: boolean;
+  analysisEnabled: boolean;
   configured: boolean;
+  analysisConfigured: boolean;
   status: "available" | "needs_config" | "experimental" | "unavailable";
   detail: string;
   keySource?: "env" | "local-settings" | "none";
   model?: string;
+  analysisModel?: string;
   baseUrl?: string;
 }
 
@@ -44,8 +49,14 @@ export interface ThirdPartyProviderSummary {
   key: ThirdPartyProviderKey;
   label: string;
   active: boolean;
+  analysisActive: boolean;
+  activeForGeneration: boolean;
+  activeForAnalysis: boolean;
   configured: boolean;
+  analysisConfigured: boolean;
   enabled: boolean;
+  generationEnabled: boolean;
+  analysisEnabled: boolean;
   status: "available" | "needs_config";
   detail: string;
   keySource: "env" | "local-settings" | "none";
@@ -57,6 +68,7 @@ export interface ThirdPartyProviderSummary {
 export interface ProviderSettingsResponse {
   ok: true;
   activeProvider: ImageProviderMode;
+  activeAnalysisProvider: ImageProviderMode;
   providers: ProviderSummary[];
   thirdPartyProviders: ThirdPartyProviderSummary[];
 }
@@ -107,13 +119,16 @@ export async function getProviderSettings(): Promise<ProviderSettingsResponse> {
 
 export async function saveProviderSettings(input: {
   activeProvider?: ImageProviderMode;
+  activeAnalysisProvider?: ImageProviderMode;
   openai?: {
     apiKey?: string;
     clearApiKey?: boolean;
     model?: string;
+    analysisModel?: string;
   };
   thirdParty?: Partial<{
     activeConfig: ThirdPartyProviderKey;
+    activeAnalysisConfig: ThirdPartyProviderKey;
     geminiNanoBanana: ProviderConfigUpdate;
     openrouter: ProviderConfigUpdate;
     custom: ProviderConfigUpdate;

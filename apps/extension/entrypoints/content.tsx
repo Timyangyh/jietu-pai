@@ -43,6 +43,7 @@ import {
   saveProviderSettings,
   setFavorite,
   type ImagePayload,
+  type ProviderSummary,
   type ProviderSettingsResponse,
   type ReferenceSource,
   type ThirdPartyProviderKey,
@@ -123,11 +124,20 @@ function StyleMeOverlay() {
     () => providerSettings?.providers.find((provider) => provider.active) ?? null,
     [providerSettings]
   );
+  const activeAnalysisProvider = useMemo(
+    () => providerSettings?.providers.find((provider) => provider.analysisActive) ?? activeProvider,
+    [activeProvider, providerSettings]
+  );
   const activeThirdPartyProvider = useMemo(
-    () => providerSettings?.thirdPartyProviders.find((provider) => provider.active) ?? null,
+    () => providerSettings?.thirdPartyProviders.find((provider) => provider.activeForGeneration) ?? null,
     [providerSettings]
   );
+  const activeAnalysisThirdPartyProvider = useMemo(
+    () => providerSettings?.thirdPartyProviders.find((provider) => provider.activeForAnalysis) ?? activeThirdPartyProvider,
+    [activeThirdPartyProvider, providerSettings]
+  );
   const selectedProviderMode = providerSettings?.activeProvider ?? "mock";
+  const selectedAnalysisProviderMode = providerSettings?.activeAnalysisProvider ?? selectedProviderMode;
   const generationElapsedMs = generationStartedAt ? nowMs - generationStartedAt : null;
 
   useEffect(() => {
@@ -196,6 +206,7 @@ function StyleMeOverlay() {
         setProviderSettings({
           ok: true,
           activeProvider: result.activeProvider,
+          activeAnalysisProvider: result.activeAnalysisProvider ?? result.activeProvider,
           providers: [],
           thirdPartyProviders: []
         });
@@ -235,7 +246,7 @@ function StyleMeOverlay() {
   async function handleAnalyze() {
     if (!reference) return;
     await withBusy("分析原图", async () => {
-      const result = await analyzeRecipe(toImagePayload(reference), buildSource(reference), selectedProviderMode);
+      const result = await analyzeRecipe(toImagePayload(reference), buildSource(reference), selectedAnalysisProviderMode);
       setRecipe(result.recipe);
       setNotice("原图已分析：已提取姿势、服装、光线和构图");
     });
@@ -269,7 +280,7 @@ function StyleMeOverlay() {
         const nextRecipe =
           recipe ??
           (
-            await analyzeRecipe(toImagePayload(reference), buildSource(reference), selectedProviderMode)
+            await analyzeRecipe(toImagePayload(reference), buildSource(reference), selectedAnalysisProviderMode)
           ).recipe;
         if (!recipe) setRecipe(nextRecipe);
 
@@ -329,15 +340,24 @@ function StyleMeOverlay() {
     await withBusy("切换 Provider", async () => {
       const result = await saveProviderSettings({ activeProvider: mode });
       setProviderSettings(result);
-      setNotice(`Provider 已切换为 ${providerLabel(mode)}`);
+      setNotice(`生图 Provider 已切换为 ${providerLabel(mode)}`);
     });
   }
 
-  async function handleSaveOpenAIConfig(input: { apiKey?: string; model: string }) {
+  async function handleAnalysisProviderChange(mode: ImageProviderMode) {
+    await withBusy("切换识图 Provider", async () => {
+      const result = await saveProviderSettings({ activeAnalysisProvider: mode });
+      setProviderSettings(result);
+      setNotice(`识图 Provider 已切换为 ${providerLabel(mode)}`);
+    });
+  }
+
+  async function handleSaveOpenAIConfig(input: { apiKey?: string; model: string; analysisModel: string }) {
     await withBusy("保存 Provider 配置", async () => {
       const result = await saveProviderSettings({
         openai: {
           model: input.model,
+          analysisModel: input.analysisModel,
           ...(input.apiKey ? { apiKey: input.apiKey } : {})
         }
       });
@@ -374,16 +394,16 @@ function StyleMeOverlay() {
     });
   }
 
-  async function handleSelectThirdPartyConfig(key: ThirdPartyProviderKey) {
+  async function handleSelectThirdPartyConfig(key: ThirdPartyProviderKey, usage: "generation" | "analysis") {
     await withBusy("切换第三方 API", async () => {
       const result = await saveProviderSettings({
-        activeProvider: "third-party",
+        ...(usage === "generation" ? { activeProvider: "third-party" as const } : { activeAnalysisProvider: "third-party" as const }),
         thirdParty: {
-          activeConfig: key
+          ...(usage === "generation" ? { activeConfig: key } : { activeAnalysisConfig: key })
         }
       });
       setProviderSettings(result);
-      setNotice(`当前第三方 API 已切换为 ${thirdPartyLabel(key)}`);
+      setNotice(`${usage === "generation" ? "生图" : "识图"}第三方 API 已切换为 ${thirdPartyLabel(key)}`);
     });
   }
 
@@ -691,37 +711,84 @@ function StyleMeOverlay() {
               <div className="styleme-provider-status">
                 <Settings size={15} />
                 <strong>
+                  识图 API：
+                  {activeAnalysisProvider?.mode === "third-party" && activeAnalysisThirdPartyProvider
+                    ? `${activeAnalysisProvider.label} · ${activeAnalysisThirdPartyProvider.label}`
+                    : activeAnalysisProvider?.label ?? providerLabel(selectedAnalysisProviderMode)}
+                </strong>
+                <span>{providerStatusLabel(activeAnalysisProvider?.status)}</span>
+              </div>
+              <select
+                disabled={Boolean(busy)}
+                value={selectedAnalysisProviderMode}
+                onChange={(event) => handleAnalysisProviderChange(event.target.value as ImageProviderMode)}
+              >
+                {(providerSettings?.providers.filter((provider) => provider.mode !== "codex-dev") ?? [fallbackMockProvider()]).map((provider) => (
+                  <option key={provider.mode} value={provider.mode}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+              {selectedAnalysisProviderMode === "third-party" && (
+                <label className="styleme-third-party-picker">
+                  <span>识图使用</span>
+                  <select
+                    disabled={Boolean(busy)}
+                    value={activeAnalysisThirdPartyProvider?.key ?? ""}
+                    onChange={(event) => handleSelectThirdPartyConfig(event.target.value as ThirdPartyProviderKey, "analysis")}
+                  >
+                    {(providerSettings?.thirdPartyProviders ?? []).map((provider) => (
+                      <option key={provider.key} value={provider.key}>
+                        {provider.label}
+                        {provider.analysisConfigured ? "" : "（未配置识图）"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {activeAnalysisProvider?.analysisModel && (
+                <p>
+                  识图模型：{activeAnalysisProvider.analysisModel}
+                  {activeAnalysisProvider.mode === "third-party"
+                    ? ` · API：${activeAnalysisThirdPartyProvider?.label ?? "未选择"}`
+                    : ""}
+                  {activeAnalysisProvider.keySource ? ` · key 来源：${keySourceLabel(activeAnalysisProvider.keySource)}` : ""}
+                </p>
+              )}
+
+              <div className="styleme-provider-status">
+                <Send size={15} />
+                <strong>
+                  生图 API：
                   {activeProvider?.mode === "third-party" && activeThirdPartyProvider
                     ? `${activeProvider.label} · ${activeThirdPartyProvider.label}`
-                    : activeProvider?.label ?? providerLabel(providerSettings?.activeProvider ?? "mock")}
+                    : activeProvider?.label ?? providerLabel(selectedProviderMode)}
                 </strong>
                 <span>{providerStatusLabel(activeProvider?.status)}</span>
               </div>
               <select
                 disabled={Boolean(busy)}
-                value={providerSettings?.activeProvider ?? "mock"}
+                value={selectedProviderMode}
                 onChange={(event) => handleProviderChange(event.target.value as ImageProviderMode)}
               >
-                {(providerSettings?.providers.filter((provider) => provider.mode !== "codex-dev") ?? [
-                  { mode: "mock", label: "Mock 占位测试", enabled: true }
-                ]).map((provider) => (
-                  <option key={provider.mode} value={provider.mode} disabled={!provider.enabled}>
+                {(providerSettings?.providers.filter((provider) => provider.mode !== "codex-dev") ?? [fallbackMockProvider()]).map((provider) => (
+                  <option key={provider.mode} value={provider.mode}>
                     {provider.label}
                   </option>
                 ))}
               </select>
-              {providerSettings?.activeProvider === "third-party" && (
+              {selectedProviderMode === "third-party" && (
                 <label className="styleme-third-party-picker">
-                  <span>使用 API</span>
+                  <span>生图使用</span>
                   <select
                     disabled={Boolean(busy)}
                     value={activeThirdPartyProvider?.key ?? ""}
-                    onChange={(event) => handleSelectThirdPartyConfig(event.target.value as ThirdPartyProviderKey)}
+                    onChange={(event) => handleSelectThirdPartyConfig(event.target.value as ThirdPartyProviderKey, "generation")}
                   >
-                    {providerSettings.thirdPartyProviders.map((provider) => (
-                      <option key={provider.key} value={provider.key} disabled={!provider.enabled}>
+                    {(providerSettings?.thirdPartyProviders ?? []).map((provider) => (
+                      <option key={provider.key} value={provider.key}>
                         {provider.label}
-                        {provider.configured ? "" : "（未配置）"}
+                        {provider.configured ? "" : "（未配置生图）"}
                       </option>
                     ))}
                   </select>
@@ -729,7 +796,7 @@ function StyleMeOverlay() {
               )}
               {activeProvider?.model && (
                 <p>
-                  当前模型：{activeProvider.model}
+                  生图模型：{activeProvider.model}
                   {activeProvider.mode === "third-party"
                     ? ` · 看图分析：${activeThirdPartyProvider?.analysisModel || "未配置"}`
                     : ""}
@@ -737,10 +804,10 @@ function StyleMeOverlay() {
                 </p>
               )}
               {activeProvider?.detail && <p>{activeProvider.detail}</p>}
-              {providerSettings?.activeProvider === "third-party" && activeThirdPartyProvider && !activeThirdPartyProvider.analysisModel && (
+              {selectedAnalysisProviderMode === "third-party" && activeAnalysisThirdPartyProvider && !activeAnalysisThirdPartyProvider.analysisModel && (
                 <div className="styleme-provider-config-warning">
                   <AlertTriangle size={15} />
-                  <span>{activeThirdPartyProvider.label} 缺少看图分析模型。</span>
+                  <span>{activeAnalysisThirdPartyProvider.label} 缺少看图分析模型。</span>
                   <button type="button" onClick={() => setProviderConfigOpen(true)}>
                     填写
                   </button>
@@ -860,29 +927,30 @@ function StyleMeOverlay() {
 function ProviderConfigPanel(props: {
   settings: ProviderSettingsResponse;
   busy: boolean;
-  onSaveOpenAI: (input: { apiKey?: string; model: string }) => Promise<void>;
+  onSaveOpenAI: (input: { apiKey?: string; model: string; analysisModel: string }) => Promise<void>;
   onClearOpenAI: () => Promise<void>;
   onSaveThirdParty: (
     key: ThirdPartyProviderKey,
     input: { apiKey?: string; baseUrl: string; model: string; analysisModel: string }
   ) => Promise<void>;
-  onSelectThirdParty: (key: ThirdPartyProviderKey) => Promise<void>;
+  onSelectThirdParty: (key: ThirdPartyProviderKey, usage: "generation" | "analysis") => Promise<void>;
   onClearThirdParty: (key: ThirdPartyProviderKey) => Promise<void>;
 }) {
   const openai = props.settings.providers.find((provider) => provider.mode === "openai-api");
-  const activeThirdParty = props.settings.thirdPartyProviders.find((provider) => provider.active);
-  const inactiveThirdParty = props.settings.thirdPartyProviders.filter((provider) => !provider.active);
   const [openaiModel, setOpenaiModel] = useState(openai?.model ?? "gpt-image-2");
+  const [openaiAnalysisModel, setOpenaiAnalysisModel] = useState(openai?.analysisModel ?? "gpt-4.1-mini");
   const [openaiKey, setOpenaiKey] = useState("");
 
   useEffect(() => {
     setOpenaiModel(openai?.model ?? "gpt-image-2");
+    setOpenaiAnalysisModel(openai?.analysisModel ?? "gpt-4.1-mini");
     setOpenaiKey("");
-  }, [openai?.model, openai?.keySource]);
+  }, [openai?.model, openai?.analysisModel, openai?.keySource]);
 
   async function saveOpenAI() {
     await props.onSaveOpenAI({
       model: openaiModel,
+      analysisModel: openaiAnalysisModel,
       ...(openaiKey.trim() ? { apiKey: openaiKey.trim() } : {})
     });
     setOpenaiKey("");
@@ -890,24 +958,22 @@ function ProviderConfigPanel(props: {
 
   return (
     <div className="styleme-provider-config">
-      {activeThirdParty && (
-        <ThirdPartyConfigForm
-          provider={activeThirdParty}
-          busy={props.busy}
-          onSave={props.onSaveThirdParty}
-          onSelect={props.onSelectThirdParty}
-          onClear={props.onClearThirdParty}
-        />
-      )}
-
       <div className="styleme-provider-config-block">
         <div className="styleme-config-title">
           <strong>OpenAI</strong>
           <span>{openai?.configured ? `已配置 · ${keySourceLabel(openai.keySource)}` : "未配置 key"}</span>
         </div>
         <label>
-          <span>模型</span>
+          <span>生图模型</span>
           <input value={openaiModel} onChange={(event) => setOpenaiModel(event.target.value)} placeholder="gpt-image-2" />
+        </label>
+        <label>
+          <span>看图分析模型</span>
+          <input
+            value={openaiAnalysisModel}
+            onChange={(event) => setOpenaiAnalysisModel(event.target.value)}
+            placeholder="gpt-4.1-mini"
+          />
         </label>
         <label>
           <span>API key</span>
@@ -929,7 +995,7 @@ function ProviderConfigPanel(props: {
       </div>
 
       <div className="styleme-provider-config-list">
-        {inactiveThirdParty.map((provider) => (
+        {props.settings.thirdPartyProviders.map((provider) => (
           <ThirdPartyConfigForm
             key={provider.key}
             provider={provider}
@@ -951,7 +1017,7 @@ function ThirdPartyConfigForm(props: {
     key: ThirdPartyProviderKey,
     input: { apiKey?: string; baseUrl: string; model: string; analysisModel: string }
   ) => Promise<void>;
-  onSelect: (key: ThirdPartyProviderKey) => Promise<void>;
+  onSelect: (key: ThirdPartyProviderKey, usage: "generation" | "analysis") => Promise<void>;
   onClear: (key: ThirdPartyProviderKey) => Promise<void>;
 }) {
   const { provider } = props;
@@ -982,8 +1048,9 @@ function ThirdPartyConfigForm(props: {
       <div className="styleme-config-title">
         <strong>{provider.label}</strong>
         <span>
-          {provider.active ? "当前配置 · " : ""}
-          {provider.configured ? `已配置 · ${keySourceLabel(provider.keySource)}` : "未配置 key"} · {provider.detail}
+          {provider.activeForGeneration ? "生图当前 · " : ""}
+          {provider.activeForAnalysis ? "识图当前 · " : ""}
+          {provider.generationEnabled || provider.analysisEnabled ? `已配置 · ${keySourceLabel(provider.keySource)}` : "未配置 key"} · {provider.detail}
         </span>
       </div>
       <label>
@@ -1007,7 +1074,7 @@ function ThirdPartyConfigForm(props: {
         <input
           value={apiKey}
           onChange={(event) => setApiKey(event.target.value)}
-          placeholder={provider.configured ? "已保存，输入新 key 可替换" : "粘贴 API key"}
+          placeholder={provider.generationEnabled || provider.analysisEnabled ? "已保存，输入新 key 可替换" : "粘贴 API key"}
           type="password"
         />
       </label>
@@ -1015,8 +1082,11 @@ function ThirdPartyConfigForm(props: {
         <button type="button" disabled={props.busy} onClick={save}>
           保存
         </button>
-        <button type="button" disabled={props.busy || !provider.enabled} onClick={() => props.onSelect(provider.key)}>
-          使用此 API
+        <button type="button" disabled={props.busy} onClick={() => props.onSelect(provider.key, "generation")}>
+          用于生图
+        </button>
+        <button type="button" disabled={props.busy} onClick={() => props.onSelect(provider.key, "analysis")}>
+          用于识图
         </button>
         <button type="button" disabled={props.busy || provider.keySource === "none"} onClick={() => props.onClear(provider.key)}>
           清除 key
@@ -1405,6 +1475,21 @@ function providerLabel(mode: ImageProviderMode): string {
     "codex-dev": "Codex 调试"
   };
   return labels[mode];
+}
+
+function fallbackMockProvider(): ProviderSummary {
+  return {
+    mode: "mock",
+    label: "Mock 占位测试",
+    active: true,
+    analysisActive: true,
+    enabled: true,
+    analysisEnabled: true,
+    configured: true,
+    analysisConfigured: true,
+    status: "available",
+    detail: "0 成本占位生成，只验证插件流程和相册，不是真实 AI 写真。"
+  };
 }
 
 function providerStatusLabel(status?: string): string {

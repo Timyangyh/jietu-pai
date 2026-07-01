@@ -78,9 +78,11 @@ pnpm start:server
 ```bash
 OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_IMAGE_MODEL=gpt-image-2
+OPENAI_ANALYSIS_MODEL=gpt-4.1-mini
 GEMINI_NANO_BANANA_API_KEY=<your-gemini-api-key>
 GEMINI_NANO_BANANA_BASE_URL=https://generativelanguage.googleapis.com
 GEMINI_NANO_BANANA_MODEL=gemini-2.5-flash-image
+GEMINI_NANO_BANANA_ANALYSIS_MODEL=<your-gemini-vision-model>
 OPENROUTER_API_KEY=<your-openrouter-api-key>
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_IMAGE_MODEL=google/gemini-2.5-flash-image-preview
@@ -93,9 +95,11 @@ CUSTOM_PROVIDER_ANALYSIS_MODEL=<your-vision-model>
 
 API key 只应保存在本地服务侧的 `.env` 或本地设置中，不要写进插件包、截图、日志或提交记录。
 
-配置多个第三方 API 后，实际生成会使用当前选中的第三方配置。可以在生成任务里的“使用 API”下拉框切换，也可以在对应配置卡片点击“使用此 API”。“保存”只保存配置，不会自动切换当前使用的 API。
+配置多个第三方 API 后，识图和生图可以分别选择当前使用的 API。可以在生成任务里的“识图使用”“生图使用”下拉框切换，也可以在对应配置卡片点击“用于识图”或“用于生图”。“保存”只保存配置，不会自动切换当前使用的 API。
 
-第三方配置里的“模型”用于生图；“看图分析模型”用于读取参考图并生成图片配方。OpenRouter 和自定义 API 都保留独立填写入口，本地服务只会使用你当前配置中填写的看图分析模型，不会自动替你切换到备用模型。若模型因地区、额度或不支持图片输入失败，插件会显示实际错误，修改配置后可重新分析。
+未配置 key 的 API 也可以先选中，插件会显示“需配置”，并保留配置入口；填写并保存 key 后即可解除需配置状态。
+
+OpenAI 和第三方配置里的“生图模型”用于输出图片；“看图分析模型”用于读取参考图并生成图片配方。本地服务只会使用当前选择的识图 API 做原图分析，使用当前选择的生图 API 做图片生成，不会自动替你切换到备用模型。若模型因地区、额度或不支持图片输入失败，插件会显示实际错误，修改配置后可重新分析或重新生成。
 
 ## 使用
 
