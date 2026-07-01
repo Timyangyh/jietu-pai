@@ -54,6 +54,62 @@ describe("local server", () => {
     expect(body.activeProvider).toBeTruthy();
   });
 
+  it("does not expose local API CORS access to regular websites", async () => {
+    const blockedResponse = await fetch(`${baseUrl}/v1/settings/providers`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://example.invalid",
+        "access-control-request-method": "POST"
+      }
+    });
+    expect(blockedResponse.status).toBe(204);
+    expect(blockedResponse.headers.get("access-control-allow-origin")).toBeNull();
+
+    const localPageResponse = await fetch(`${baseUrl}/v1/settings/providers`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        "access-control-request-method": "POST"
+      }
+    });
+    expect(localPageResponse.status).toBe(204);
+    expect(localPageResponse.headers.get("access-control-allow-origin")).toBeNull();
+
+    const extensionResponse = await fetch(`${baseUrl}/v1/settings/providers`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "chrome-extension://abcdefghijklmnop",
+        "access-control-request-method": "POST"
+      }
+    });
+    expect(extensionResponse.status).toBe(204);
+    expect(extensionResponse.headers.get("access-control-allow-origin")).toBe("chrome-extension://abcdefghijklmnop");
+  });
+
+  it("only serves generated image files through the local media endpoint", async () => {
+    await fs.writeFile(projectEnvPath, "OPENAI_API_KEY=should-not-leak\n", "utf8");
+
+    const envResponse = await fetch(`${baseUrl}/v1/files?path=${encodeURIComponent(".env")}`);
+    expect(envResponse.status).toBe(403);
+    expect(await envResponse.text()).not.toContain("should-not-leak");
+
+    const sourceResponse = await fetch(`${baseUrl}/v1/files?path=${encodeURIComponent("package.json")}`);
+    expect(sourceResponse.status).toBe(403);
+
+    const imagePath = path.join(localLibraryRoot, "references", "test-reference.png");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(
+      imagePath,
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lrWZ2wAAAABJRU5ErkJggg==", "base64")
+    );
+
+    const relativePath = path.relative(projectRoot, imagePath);
+    const imageResponse = await fetch(`${baseUrl}/v1/files?path=${encodeURIComponent(relativePath)}`);
+    expect(imageResponse.ok).toBe(true);
+    expect(imageResponse.headers.get("content-type")).toBe("image/png");
+    expect((await imageResponse.arrayBuffer()).byteLength).toBeGreaterThan(0);
+  });
+
   it("analyzes a reference image data URL into a complete recipe", async () => {
     const dataUrl =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lrWZ2wAAAABJRU5ErkJggg==";

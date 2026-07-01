@@ -21,6 +21,7 @@ import {
   codexJobsRoot,
   fileUrl,
   localLibraryRoot,
+  localJobsRoot,
   projectRoot,
   relativeToProjectRoot,
   runsRoot
@@ -54,6 +55,12 @@ import {
 
 const MAX_BODY_BYTES = 40 * 1024 * 1024;
 const galleryPath = path.join(localLibraryRoot, "gallery.json");
+const servableFileRoots = [
+  path.join(localLibraryRoot, "references"),
+  localJobsRoot,
+  codexJobsRoot
+].map((item) => path.resolve(item));
+const servableImageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 
 loadProjectEnv();
 
@@ -83,7 +90,7 @@ interface ReviewRequest {
 
 export function createStyleMeServer(_options: CreateStyleMeServerOptions = {}): http.Server {
   return http.createServer(async (request, response) => {
-    setCorsHeaders(response);
+    setCorsHeaders(request, response);
     if (request.method === "OPTIONS") {
       response.writeHead(204);
       response.end();
@@ -544,11 +551,26 @@ async function readGallery(): Promise<GalleryIndex> {
 }
 
 async function serveFile(relativePath: string): Promise<unknown> {
-  const absolutePath = assertInsideProject(path.join(projectRoot, relativePath));
+  const absolutePath = resolveServableFilePath(relativePath);
   const buffer = await fs.readFile(absolutePath);
   const mimeType = guessMimeFromFileName(absolutePath);
   const meta = readImageMeta(buffer, mimeType);
   return new FileResponse(buffer, mimeType, meta);
+}
+
+function resolveServableFilePath(relativePath: string): string {
+  const absolutePath = assertInsideProject(path.join(projectRoot, relativePath));
+  const extension = path.extname(absolutePath).toLowerCase();
+  if (!servableImageExtensions.has(extension)) {
+    throw new HttpError(403, "File is not available through the local media endpoint");
+  }
+
+  const resolved = path.resolve(absolutePath);
+  const isUnderAllowedRoot = servableFileRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`));
+  if (!isUnderAllowedRoot) {
+    throw new HttpError(403, "File is outside the local media library");
+  }
+  return resolved;
 }
 
 async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
@@ -583,10 +605,18 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(body);
 }
 
-function setCorsHeaders(response: ServerResponse): void {
-  response.setHeader("access-control-allow-origin", "*");
+function setCorsHeaders(request: IncomingMessage, response: ServerResponse): void {
+  const origin = request.headers.origin;
+  if (origin && isAllowedCorsOrigin(origin)) {
+    response.setHeader("access-control-allow-origin", origin);
+    response.setHeader("vary", "Origin");
+  }
   response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
   response.setHeader("access-control-allow-headers", "content-type");
+}
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  return origin.startsWith("chrome-extension://");
 }
 
 function clampInteger(value: number, min: number, max: number): number {

@@ -1,3 +1,4 @@
+import { browser } from "wxt/browser";
 import type { ImageProviderMode, LocalGenerationJobManifest, QualityScore, StyleRecipe } from "@styleme/core";
 
 export const LOCAL_API_BASE = "http://127.0.0.1:8787";
@@ -194,16 +195,20 @@ export function absoluteLocalUrl(urlOrPath: string): string {
   return `${LOCAL_API_BASE}${urlOrPath}`;
 }
 
+interface LocalApiProxyResponse {
+  ok: boolean;
+  status: number;
+  text: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${LOCAL_API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init.headers ?? {})
-    }
-  });
-  const text = await response.text();
-  const body = text ? JSON.parse(text) : {};
+  const response = (await browser.runtime.sendMessage({
+    type: "STYLEME_LOCAL_API",
+    path,
+    method: init.method ?? "GET",
+    body: typeof init.body === "string" ? init.body : undefined
+  })) as LocalApiProxyResponse;
+  const body = response.text ? JSON.parse(response.text) : {};
   if (!response.ok) {
     throw new Error(body.error ?? `Local API failed: ${response.status}`);
   }
