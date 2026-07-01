@@ -36,6 +36,7 @@ import {
 } from "./providers/codexDevAdapter";
 import { MockImageProvider } from "./providers/mockImageProvider";
 import { OpenAIImagesAdapter } from "./providers/openAIImagesAdapter";
+import { CompatibleImagesApiAdapter, GeminiImagesAdapter } from "./providers/thirdPartyImageProviders";
 import {
   createLocalGenerationJob,
   listLocalManifests,
@@ -46,6 +47,8 @@ import {
 import {
   getOpenAIApiKey,
   getOpenAIModel,
+  getEffectiveThirdPartyProviderKey,
+  getThirdPartyApiConfig,
   readProviderSettings,
   summarizeCurrentProviderSettings,
   updateProviderSettings,
@@ -255,10 +258,11 @@ async function analyzeReference(body: AnalyzeRequest): Promise<unknown> {
   const referencePath = path.join(localLibraryRoot, "references", `${recipeId}${decoded.extension}`);
   await fs.writeFile(referencePath, decoded.buffer);
 
+  const settings = await readProviderSettings();
+  const providerMode = body.providerMode ?? settings.activeProvider;
   const recipe =
-    body.providerMode === "codex-account"
-      ? await createProvider("codex-account", await readProviderSettings()).analyzeStyle([referencePath])
-      : buildRecipeFromHints(
+    providerMode === "mock" || providerMode === "codex-dev"
+      ? buildRecipeFromHints(
           recipeId,
           decoded.meta,
           compactHint({
@@ -266,7 +270,8 @@ async function analyzeReference(body: AnalyzeRequest): Promise<unknown> {
             fileName: body.reference.fileName,
             sourceUrl: body.reference.sourceUrl
           })
-        );
+        )
+      : await createProvider(providerMode, settings).analyzeStyle([referencePath]);
   if (!validateStyleRecipe(recipe)) {
     throw new HttpError(500, "Provider returned an invalid StyleRecipe");
   }
@@ -387,7 +392,32 @@ function createProvider(mode: ImageProviderMode, settings: RawProviderSettings):
   }
   if (mode === "codex-account") return new CodexAccountProvider();
   if (mode === "codex-dev") return createUnavailableProvider("Codex 调试模式只创建任务包，请使用高级调试入口。");
-  return createUnavailableProvider("第三方 Provider 尚未接入。");
+  const activeThirdParty = getEffectiveThirdPartyProviderKey(settings);
+  const config = getThirdPartyApiConfig(settings, activeThirdParty);
+  if (activeThirdParty === "geminiNanoBanana") {
+    return new GeminiImagesAdapter({
+      baseUrl: config.baseUrl,
+      model: config.model,
+      analysisModel: config.analysisModel,
+      ...(config.apiKey ? { apiKey: config.apiKey } : {})
+    });
+  }
+  if (activeThirdParty === "openrouter") {
+    return new CompatibleImagesApiAdapter({
+      providerLabel: "OpenRouter",
+      baseUrl: config.baseUrl,
+      model: config.model,
+      analysisModel: config.analysisModel,
+      ...(config.apiKey ? { apiKey: config.apiKey } : {})
+    });
+  }
+  return new CompatibleImagesApiAdapter({
+    providerLabel: "自定义 API",
+    baseUrl: config.baseUrl,
+    model: config.model,
+    analysisModel: config.analysisModel,
+    ...(config.apiKey ? { apiKey: config.apiKey } : {})
+  });
 }
 
 function createUnavailableProvider(message: string): ImageProvider {

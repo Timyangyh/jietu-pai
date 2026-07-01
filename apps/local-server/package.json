@@ -1,14 +1,15 @@
 {
   "name": "@styleme/local-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "STYLEME_LOCAL_WATCH=1 tsx watch --include \"src/**/*.ts\" --include \"../../packages/*/src/**/*.ts\" src/index.ts",
+    "start": "STYLEME_LOCAL_WATCH=1 tsx watch --clear-screen=false --include \"src/**/*.ts\" --include \"../../packages/*/src/**/*.ts\" src/index.ts",
+    "start:once": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "smoke": "tsx src/smoke.ts"

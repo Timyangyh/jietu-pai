@@ -393,6 +393,48 @@ button:disabled {
   justify-content: flex-start;
 }
 
+.styleme-third-party-picker {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.styleme-third-party-picker select {
+  width: 100%;
+  min-width: 0;
+}
+
+.styleme-provider-config-warning {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid #ecd48b;
+  border-radius: 8px;
+  background: #fff9df;
+  color: #5f3b00;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.styleme-provider-config-warning button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid #d9b44e;
+  border-radius: 8px;
+  background: #fff;
+  color: #5f3b00;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .styleme-provider-config {
   display: grid;
   gap: 10px;

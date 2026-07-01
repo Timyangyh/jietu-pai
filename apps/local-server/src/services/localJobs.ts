@@ -44,15 +44,7 @@ export async function createLocalGenerationJob(
   const recipe =
     input.recipe && validateStyleRecipe(input.recipe)
       ? input.recipe
-      : buildRecipeFromHints(
-          `recipe_${input.jobId}`,
-          reference,
-          compactHint({
-            ...input.source,
-            fileName: input.reference.fileName,
-            sourceUrl: input.reference.sourceUrl
-          })
-        );
+      : await analyzeRecipeForGeneration(input, reference, provider);
 
   await writeJsonFile(path.join(inputDir, "recipe.json"), recipe);
   const now = new Date().toISOString();
@@ -76,6 +68,28 @@ export async function createLocalGenerationJob(
   await writeManifest(jobDir, queuedManifest);
   await writeJsonFile(path.join(jobDir, "review.json"), {});
   return runLocalGenerationJob(queuedManifest, provider);
+}
+
+async function analyzeRecipeForGeneration(
+  input: CreateLocalGenerationInput,
+  reference: LocalFileAsset,
+  provider: ImageProvider
+): Promise<StyleRecipe> {
+  const recipeId = `recipe_${input.jobId}`;
+  if (input.providerMode === "mock" || input.providerMode === "codex-dev") {
+    return buildRecipeFromHints(
+      recipeId,
+      reference,
+      compactHint({
+        ...input.source,
+        fileName: input.reference.fileName,
+        sourceUrl: input.reference.sourceUrl
+      })
+    );
+  }
+
+  const analyzedRecipe = await provider.analyzeStyle([path.join(projectRoot, reference.relativePath)]);
+  return validateStyleRecipe(analyzedRecipe) ? analyzedRecipe : buildRecipeFromHints(recipeId, reference, {});
 }
 
 export async function retryLocalGenerationJob(

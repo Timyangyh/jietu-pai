@@ -123,6 +123,10 @@ function StyleMeOverlay() {
     () => providerSettings?.providers.find((provider) => provider.active) ?? null,
     [providerSettings]
   );
+  const activeThirdPartyProvider = useMemo(
+    () => providerSettings?.thirdPartyProviders.find((provider) => provider.active) ?? null,
+    [providerSettings]
+  );
   const selectedProviderMode = providerSettings?.activeProvider ?? "mock";
   const generationElapsedMs = generationStartedAt ? nowMs - generationStartedAt : null;
 
@@ -277,7 +281,8 @@ function StyleMeOverlay() {
           })),
           source: buildSource(reference),
           recipe: nextRecipe,
-          count
+          count,
+          providerMode: selectedProviderMode
         });
         setActiveJobId(result.job.jobId);
         await loadJobs();
@@ -351,15 +356,15 @@ function StyleMeOverlay() {
 
   async function handleSaveThirdPartyConfig(
     key: ThirdPartyProviderKey,
-    input: { apiKey?: string; baseUrl: string; model: string }
+    input: { apiKey?: string; baseUrl: string; model: string; analysisModel: string }
   ) {
     await withBusy("保存 Provider 配置", async () => {
       const result = await saveProviderSettings({
         thirdParty: {
-          activeConfig: key,
           [key]: {
             baseUrl: input.baseUrl,
             model: input.model,
+            analysisModel: input.analysisModel,
             ...(input.apiKey ? { apiKey: input.apiKey } : {})
           }
         }
@@ -369,11 +374,23 @@ function StyleMeOverlay() {
     });
   }
 
+  async function handleSelectThirdPartyConfig(key: ThirdPartyProviderKey) {
+    await withBusy("切换第三方 API", async () => {
+      const result = await saveProviderSettings({
+        activeProvider: "third-party",
+        thirdParty: {
+          activeConfig: key
+        }
+      });
+      setProviderSettings(result);
+      setNotice(`当前第三方 API 已切换为 ${thirdPartyLabel(key)}`);
+    });
+  }
+
   async function handleClearThirdPartyKey(key: ThirdPartyProviderKey) {
     await withBusy("清除 Provider key", async () => {
       const result = await saveProviderSettings({
         thirdParty: {
-          activeConfig: key,
           [key]: { clearApiKey: true }
         }
       });
@@ -518,13 +535,17 @@ function StyleMeOverlay() {
   }
 
   function handleCaughtError(err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     if (isExtensionContextInvalidatedError(err)) {
       setExtensionInvalidated(true);
       setError("插件刚被重新加载，当前网页里的旧插件脚本已失效。刷新这个网页后再截图。");
       return;
     }
     setExtensionInvalidated(false);
-    setError(err instanceof Error ? err.message : String(err));
+    if (/分析模型未配置|看图分析模型未配置/.test(message)) {
+      setProviderConfigOpen(true);
+    }
+    setError(message);
   }
 
   return (
@@ -669,7 +690,11 @@ function StyleMeOverlay() {
             <div className="styleme-provider-panel">
               <div className="styleme-provider-status">
                 <Settings size={15} />
-                <strong>{activeProvider?.label ?? providerLabel(providerSettings?.activeProvider ?? "mock")}</strong>
+                <strong>
+                  {activeProvider?.mode === "third-party" && activeThirdPartyProvider
+                    ? `${activeProvider.label} · ${activeThirdPartyProvider.label}`
+                    : activeProvider?.label ?? providerLabel(providerSettings?.activeProvider ?? "mock")}
+                </strong>
                 <span>{providerStatusLabel(activeProvider?.status)}</span>
               </div>
               <select
@@ -685,13 +710,42 @@ function StyleMeOverlay() {
                   </option>
                 ))}
               </select>
+              {providerSettings?.activeProvider === "third-party" && (
+                <label className="styleme-third-party-picker">
+                  <span>使用 API</span>
+                  <select
+                    disabled={Boolean(busy)}
+                    value={activeThirdPartyProvider?.key ?? ""}
+                    onChange={(event) => handleSelectThirdPartyConfig(event.target.value as ThirdPartyProviderKey)}
+                  >
+                    {providerSettings.thirdPartyProviders.map((provider) => (
+                      <option key={provider.key} value={provider.key} disabled={!provider.enabled}>
+                        {provider.label}
+                        {provider.configured ? "" : "（未配置）"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {activeProvider?.model && (
                 <p>
                   当前模型：{activeProvider.model}
+                  {activeProvider.mode === "third-party"
+                    ? ` · 看图分析：${activeThirdPartyProvider?.analysisModel || "未配置"}`
+                    : ""}
                   {activeProvider.keySource ? ` · key 来源：${keySourceLabel(activeProvider.keySource)}` : ""}
                 </p>
               )}
               {activeProvider?.detail && <p>{activeProvider.detail}</p>}
+              {providerSettings?.activeProvider === "third-party" && activeThirdPartyProvider && !activeThirdPartyProvider.analysisModel && (
+                <div className="styleme-provider-config-warning">
+                  <AlertTriangle size={15} />
+                  <span>{activeThirdPartyProvider.label} 缺少看图分析模型。</span>
+                  <button type="button" onClick={() => setProviderConfigOpen(true)}>
+                    填写
+                  </button>
+                </div>
+              )}
               <button className="styleme-secondary compact" type="button" onClick={() => setProviderConfigOpen((value) => !value)}>
                 <Settings size={15} />
                 <span>{providerConfigOpen ? "收起配置" : "配置 API"}</span>
@@ -703,6 +757,7 @@ function StyleMeOverlay() {
                   onSaveOpenAI={handleSaveOpenAIConfig}
                   onClearOpenAI={handleClearOpenAIKey}
                   onSaveThirdParty={handleSaveThirdPartyConfig}
+                  onSelectThirdParty={handleSelectThirdPartyConfig}
                   onClearThirdParty={handleClearThirdPartyKey}
                 />
               )}
@@ -809,11 +864,14 @@ function ProviderConfigPanel(props: {
   onClearOpenAI: () => Promise<void>;
   onSaveThirdParty: (
     key: ThirdPartyProviderKey,
-    input: { apiKey?: string; baseUrl: string; model: string }
+    input: { apiKey?: string; baseUrl: string; model: string; analysisModel: string }
   ) => Promise<void>;
+  onSelectThirdParty: (key: ThirdPartyProviderKey) => Promise<void>;
   onClearThirdParty: (key: ThirdPartyProviderKey) => Promise<void>;
 }) {
   const openai = props.settings.providers.find((provider) => provider.mode === "openai-api");
+  const activeThirdParty = props.settings.thirdPartyProviders.find((provider) => provider.active);
+  const inactiveThirdParty = props.settings.thirdPartyProviders.filter((provider) => !provider.active);
   const [openaiModel, setOpenaiModel] = useState(openai?.model ?? "gpt-image-2");
   const [openaiKey, setOpenaiKey] = useState("");
 
@@ -832,6 +890,16 @@ function ProviderConfigPanel(props: {
 
   return (
     <div className="styleme-provider-config">
+      {activeThirdParty && (
+        <ThirdPartyConfigForm
+          provider={activeThirdParty}
+          busy={props.busy}
+          onSave={props.onSaveThirdParty}
+          onSelect={props.onSelectThirdParty}
+          onClear={props.onClearThirdParty}
+        />
+      )}
+
       <div className="styleme-provider-config-block">
         <div className="styleme-config-title">
           <strong>OpenAI</strong>
@@ -861,12 +929,13 @@ function ProviderConfigPanel(props: {
       </div>
 
       <div className="styleme-provider-config-list">
-        {props.settings.thirdPartyProviders.map((provider) => (
+        {inactiveThirdParty.map((provider) => (
           <ThirdPartyConfigForm
             key={provider.key}
             provider={provider}
             busy={props.busy}
             onSave={props.onSaveThirdParty}
+            onSelect={props.onSelectThirdParty}
             onClear={props.onClearThirdParty}
           />
         ))}
@@ -878,24 +947,31 @@ function ProviderConfigPanel(props: {
 function ThirdPartyConfigForm(props: {
   provider: ThirdPartyProviderSummary;
   busy: boolean;
-  onSave: (key: ThirdPartyProviderKey, input: { apiKey?: string; baseUrl: string; model: string }) => Promise<void>;
+  onSave: (
+    key: ThirdPartyProviderKey,
+    input: { apiKey?: string; baseUrl: string; model: string; analysisModel: string }
+  ) => Promise<void>;
+  onSelect: (key: ThirdPartyProviderKey) => Promise<void>;
   onClear: (key: ThirdPartyProviderKey) => Promise<void>;
 }) {
   const { provider } = props;
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
   const [model, setModel] = useState(provider.model);
+  const [analysisModel, setAnalysisModel] = useState(provider.analysisModel);
   const [apiKey, setApiKey] = useState("");
 
   useEffect(() => {
     setBaseUrl(provider.baseUrl);
     setModel(provider.model);
+    setAnalysisModel(provider.analysisModel);
     setApiKey("");
-  }, [provider.baseUrl, provider.model, provider.keySource]);
+  }, [provider.baseUrl, provider.model, provider.analysisModel, provider.keySource]);
 
   async function save() {
     await props.onSave(provider.key, {
       baseUrl,
       model,
+      analysisModel,
       ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {})
     });
     setApiKey("");
@@ -906,7 +982,8 @@ function ThirdPartyConfigForm(props: {
       <div className="styleme-config-title">
         <strong>{provider.label}</strong>
         <span>
-          {provider.configured ? `已配置 · ${keySourceLabel(provider.keySource)}` : "未配置 key"} · Adapter 待接入
+          {provider.active ? "当前配置 · " : ""}
+          {provider.configured ? `已配置 · ${keySourceLabel(provider.keySource)}` : "未配置 key"} · {provider.detail}
         </span>
       </div>
       <label>
@@ -916,6 +993,14 @@ function ThirdPartyConfigForm(props: {
       <label>
         <span>模型</span>
         <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="image-model" />
+      </label>
+      <label>
+        <span>看图分析模型</span>
+        <input
+          value={analysisModel}
+          onChange={(event) => setAnalysisModel(event.target.value)}
+          placeholder="支持图片输入的模型"
+        />
       </label>
       <label>
         <span>API key</span>
@@ -929,6 +1014,9 @@ function ThirdPartyConfigForm(props: {
       <div className="styleme-config-actions">
         <button type="button" disabled={props.busy} onClick={save}>
           保存
+        </button>
+        <button type="button" disabled={props.busy || !provider.enabled} onClick={() => props.onSelect(provider.key)}>
+          使用此 API
         </button>
         <button type="button" disabled={props.busy || provider.keySource === "none"} onClick={() => props.onClear(provider.key)}>
           清除 key

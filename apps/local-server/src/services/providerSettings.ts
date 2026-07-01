@@ -19,6 +19,7 @@ export interface ProviderApiConfig {
   apiKey?: string;
   baseUrl: string;
   model: string;
+  analysisModel?: string;
 }
 
 export interface ThirdPartyProviderSettings {
@@ -44,6 +45,7 @@ export interface ProviderApiConfigUpdate {
   clearApiKey?: boolean;
   baseUrl?: string;
   model?: string;
+  analysisModel?: string;
 }
 
 export interface ProviderSettingsUpdate {
@@ -85,11 +87,12 @@ export interface ThirdPartyProviderSummary {
   active: boolean;
   configured: boolean;
   enabled: boolean;
-  status: "needs_adapter" | "needs_config";
+  status: "available" | "needs_config";
   detail: string;
   keySource: ProviderKeySource;
   baseUrl: string;
   model: string;
+  analysisModel: string;
 }
 
 export interface ProviderSettingsResponse {
@@ -151,20 +154,28 @@ export function getOpenAIModel(settings: RawProviderSettings): string {
 export function getThirdPartyApiConfig(
   settings: RawProviderSettings,
   key: ThirdPartyProviderKey
-): ProviderApiConfig & { keySource: ProviderKeySource; configured: boolean } {
+): ProviderApiConfig & { analysisModel: string; keySource: ProviderKeySource; configured: boolean } {
   const config = settings.thirdParty[key];
   const env = thirdPartyEnv(key);
   const envApiKey = firstEnv(env.apiKey);
   const apiKey = envApiKey ?? config.apiKey;
   const baseUrl = firstEnv(env.baseUrl) ?? config.baseUrl;
   const model = firstEnv(env.model) ?? config.model;
+  const analysisModel = firstEnv(env.analysisModel) ?? config.analysisModel ?? "";
   return {
     baseUrl,
     model,
+    analysisModel,
     ...(apiKey ? { apiKey } : {}),
     keySource: envApiKey ? "env" : config.apiKey ? "local-settings" : "none",
     configured: Boolean(apiKey && baseUrl && model)
   };
+}
+
+export function getEffectiveThirdPartyProviderKey(settings: RawProviderSettings): ThirdPartyProviderKey {
+  const activeConfig = getThirdPartyApiConfig(settings, settings.thirdParty.activeConfig);
+  if (activeConfig.configured) return settings.thirdParty.activeConfig;
+  return thirdPartyProviderKeys().find((key) => getThirdPartyApiConfig(settings, key).configured) ?? settings.thirdParty.activeConfig;
 }
 
 function summarizeProviderSettings(settings: RawProviderSettings): ProviderSettingsResponse {
@@ -173,6 +184,8 @@ function summarizeProviderSettings(settings: RawProviderSettings): ProviderSetti
   const openaiModel = getOpenAIModel(settings);
   const thirdPartyProviders = summarizeThirdPartyProviders(settings);
   const hasThirdPartyConfig = thirdPartyProviders.some((provider) => provider.configured);
+  const activeThirdParty = thirdPartyProviders.find((provider) => provider.active);
+  const hasEnabledThirdParty = Boolean(activeThirdParty?.enabled);
   return {
     ok: true,
     activeProvider: settings.activeProvider,
@@ -217,12 +230,17 @@ function summarizeProviderSettings(settings: RawProviderSettings): ProviderSetti
         mode: "third-party",
         label: "第三方 API",
         active: settings.activeProvider === "third-party",
-        enabled: false,
-        configured: hasThirdPartyConfig,
-        status: "unavailable",
-        detail: hasThirdPartyConfig
-          ? "已保存第三方 API 配置；Adapter 尚未接入，暂不能用于生成。"
-          : "可先保存 Gemini Nano Banana、OpenRouter 或自定义 API 配置；Adapter 尚未接入。"
+        enabled: hasEnabledThirdParty,
+        configured: Boolean(activeThirdParty?.configured ?? hasThirdPartyConfig),
+        status: hasEnabledThirdParty ? "available" : hasThirdPartyConfig ? "unavailable" : "needs_config",
+        detail: hasEnabledThirdParty
+          ? `使用 ${activeThirdParty?.label} 生成图片；配置保存在本地服务。`
+          : hasThirdPartyConfig
+            ? "已保存第三方 API 配置；当前选中的第三方 Adapter 尚未接入，暂不能用于生成。"
+            : "可先保存 Gemini Nano Banana、OpenRouter 或兼容 /images 的自定义 API 配置；已配置后可切换使用。",
+        ...(activeThirdParty?.keySource ? { keySource: activeThirdParty.keySource } : {}),
+        ...(activeThirdParty?.model ? { model: activeThirdParty.model } : {}),
+        ...(activeThirdParty?.baseUrl ? { baseUrl: activeThirdParty.baseUrl } : {})
       },
       {
         mode: "codex-dev",
@@ -302,12 +320,25 @@ function normalizeProviderApiConfig(
   value: Partial<ProviderApiConfig> | undefined,
   defaults: ProviderApiConfig
 ): ProviderApiConfig {
-  return {
+  const model = value?.model?.trim() || defaults.model;
+  const next: ProviderApiConfig = {
     ...defaults,
     ...(value ?? {}),
     baseUrl: value?.baseUrl?.trim() ?? defaults.baseUrl,
-    model: value?.model?.trim() || defaults.model
+    model
   };
+  const rawAnalysisModel =
+    typeof value?.analysisModel === "string" ? value.analysisModel.trim() : defaults.analysisModel?.trim();
+  if (rawAnalysisModel && !isLikelyImageGenerationModel(rawAnalysisModel)) {
+    next.analysisModel = rawAnalysisModel;
+  } else {
+    delete next.analysisModel;
+  }
+  return next;
+}
+
+function isLikelyImageGenerationModel(model: string): boolean {
+  return /(?:^|[/_-])(?:gpt-)?image(?:[/_-]|$)|flux|imagen|dall-e/i.test(model);
 }
 
 function updateThirdPartySettings(
@@ -330,6 +361,14 @@ function updateProviderApiConfig(current: ProviderApiConfig, update?: ProviderAp
     ...(typeof update?.baseUrl === "string" ? { baseUrl: update.baseUrl.trim() } : {}),
     ...(typeof update?.model === "string" ? { model: update.model.trim() || current.model } : {})
   };
+  if (typeof update?.analysisModel === "string") {
+    const analysisModel = update.analysisModel.trim();
+    if (analysisModel) {
+      next.analysisModel = analysisModel;
+    } else {
+      delete next.analysisModel;
+    }
+  }
   if (update?.clearApiKey) {
     delete next.apiKey;
   } else if (typeof update?.apiKey === "string" && update.apiKey.trim()) {
@@ -349,19 +388,26 @@ async function clearThirdPartyEnvKeys(update?: ProviderSettingsUpdate["thirdPart
 }
 
 function summarizeThirdPartyProviders(settings: RawProviderSettings): ThirdPartyProviderSummary[] {
+  const effectiveActiveConfig = getEffectiveThirdPartyProviderKey(settings);
   return thirdPartyProviderKeys().map((key) => {
     const config = getThirdPartyApiConfig(settings, key);
+    const enabled = config.configured;
     return {
       key,
       label: thirdPartyLabel(key),
-      active: settings.thirdParty.activeConfig === key,
+      active: effectiveActiveConfig === key,
       configured: config.configured,
-      enabled: false,
-      status: config.configured ? "needs_adapter" : "needs_config",
-      detail: config.configured ? "配置已保存；生成 Adapter 尚未接入。" : "未配置 API key。",
+      enabled,
+      status: config.configured ? "available" : "needs_config",
+      detail: !config.configured
+        ? "未配置 API key。"
+        : config.analysisModel
+          ? thirdPartyAvailableDetail(key)
+          : "配置已保存；看图分析模型未配置。",
       keySource: config.keySource,
       baseUrl: config.baseUrl,
-      model: config.model
+      model: config.model,
+      analysisModel: config.analysisModel
     };
   });
 }
@@ -380,29 +426,39 @@ function thirdPartyLabel(key: ThirdPartyProviderKey): string {
   return "自定义 API";
 }
 
+function thirdPartyAvailableDetail(key: ThirdPartyProviderKey): string {
+  if (key === "geminiNanoBanana") return "配置已保存，可通过 Gemini Interactions API 生成。";
+  if (key === "openrouter") return "配置已保存，可通过 OpenRouter Images API 生成。";
+  return "配置已保存，可通过兼容 /images 的自定义 API 生成。";
+}
+
 function thirdPartyEnv(key: ThirdPartyProviderKey): {
   apiKey: string[];
   baseUrl: string[];
   model: string[];
+  analysisModel: string[];
 } {
   if (key === "geminiNanoBanana") {
     return {
       apiKey: ["GEMINI_NANO_BANANA_API_KEY", "GEMINI_API_KEY"],
       baseUrl: ["GEMINI_NANO_BANANA_BASE_URL", "GEMINI_BASE_URL"],
-      model: ["GEMINI_NANO_BANANA_MODEL", "GEMINI_IMAGE_MODEL"]
+      model: ["GEMINI_NANO_BANANA_MODEL", "GEMINI_IMAGE_MODEL"],
+      analysisModel: ["GEMINI_NANO_BANANA_ANALYSIS_MODEL", "GEMINI_ANALYSIS_MODEL"]
     };
   }
   if (key === "openrouter") {
     return {
       apiKey: ["OPENROUTER_API_KEY"],
       baseUrl: ["OPENROUTER_BASE_URL"],
-      model: ["OPENROUTER_IMAGE_MODEL"]
+      model: ["OPENROUTER_IMAGE_MODEL"],
+      analysisModel: ["OPENROUTER_ANALYSIS_MODEL"]
     };
   }
   return {
     apiKey: ["CUSTOM_PROVIDER_API_KEY", "THIRD_PARTY_API_KEY"],
     baseUrl: ["CUSTOM_PROVIDER_BASE_URL", "THIRD_PARTY_BASE_URL"],
-    model: ["CUSTOM_PROVIDER_MODEL", "THIRD_PARTY_MODEL"]
+    model: ["CUSTOM_PROVIDER_MODEL", "THIRD_PARTY_MODEL"],
+    analysisModel: ["CUSTOM_PROVIDER_ANALYSIS_MODEL", "THIRD_PARTY_ANALYSIS_MODEL"]
   };
 }
 

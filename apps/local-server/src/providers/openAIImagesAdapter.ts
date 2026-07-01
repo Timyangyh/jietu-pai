@@ -8,25 +8,57 @@ import type {
   QualityReviewOutput,
   StyleRecipe
 } from "@styleme/core";
-import { buildRecipeFromHints } from "@styleme/core";
 import { buildGenerationPrompt } from "@styleme/prompts";
 import { guessMimeFromFileName } from "../lib/image";
+import { buildReferenceAnalysisPrompt, parseStyleRecipeText } from "./styleAnalysis";
+
+const DEFAULT_OPENAI_ANALYSIS_MODEL = "gpt-4.1-mini";
 
 export class OpenAIImagesAdapter implements ImageProvider {
   private readonly apiKey: string | undefined;
   private readonly model: string;
+  private readonly analysisModel: string;
 
-  constructor(options: { apiKey?: string; model?: string } = {}) {
+  constructor(options: { apiKey?: string; model?: string; analysisModel?: string } = {}) {
     this.apiKey = options.apiKey;
     this.model = options.model ?? "gpt-image-2";
+    this.analysisModel = options.analysisModel?.trim() || process.env.OPENAI_ANALYSIS_MODEL?.trim() || DEFAULT_OPENAI_ANALYSIS_MODEL;
   }
 
   async analyzeStyle(imagePathOrUrls: string[]): Promise<StyleRecipe> {
     if (!this.apiKey) {
       throw new Error("OPENAI_API_KEY is not configured in the local server environment");
     }
-    const sourceUrl = imagePathOrUrls[0];
-    return buildRecipeFromHints(`recipe_openai_${Date.now()}`, {}, sourceUrl ? { sourceUrl } : {});
+    const imagePathOrUrl = imagePathOrUrls[0];
+    if (!imagePathOrUrl) throw new Error("Reference image is required for OpenAI style analysis");
+
+    const recipeId = `recipe_openai_${Date.now()}`;
+    const imageUrl = await readImageDataUrl(imagePathOrUrl);
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.apiKey}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: this.analysisModel,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: buildReferenceAnalysisPrompt(recipeId) },
+              { type: "input_image", image_url: imageUrl }
+            ]
+          }
+        ],
+        temperature: 0.2
+      })
+    });
+    const body = (await response.json()) as OpenAIResponsesResponse;
+    if (!response.ok) {
+      throw new Error(body.error?.message ?? `OpenAI reference analysis failed: ${response.status}`);
+    }
+    return parseStyleRecipeText(openAIResponseText(body), recipeId);
   }
 
   async generatePortraits(input: GeneratePortraitInput): Promise<GeneratePortraitOutput> {
@@ -148,6 +180,41 @@ interface OpenAIImagesResponse {
   error?: {
     message?: string;
   };
+}
+
+interface OpenAIResponsesResponse {
+  output_text?: string;
+  output?: Array<{
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+  error?: {
+    message?: string;
+  };
+}
+
+function openAIResponseText(body: OpenAIResponsesResponse): string {
+  const outputParts =
+    body.output
+      ?.flatMap((item) => item.content ?? [])
+      .map((item) => item.text ?? "")
+      .filter(Boolean) ?? [];
+  return [body.output_text, ...outputParts].filter(Boolean).join("\n");
+}
+
+async function readImageDataUrl(imagePathOrUrl: string): Promise<string> {
+  if (imagePathOrUrl.startsWith("data:image/")) return imagePathOrUrl;
+  if (/^https?:\/\//.test(imagePathOrUrl)) {
+    const response = await fetch(imagePathOrUrl);
+    if (!response.ok) throw new Error(`Could not fetch image URL for OpenAI analysis: ${response.status}`);
+    const mimeType = response.headers.get("content-type")?.split(";")[0] ?? guessMimeFromFileName(imagePathOrUrl);
+    const data = Buffer.from(await response.arrayBuffer()).toString("base64");
+    return `data:${mimeType};base64,${data}`;
+  }
+  const buffer = await fs.readFile(imagePathOrUrl);
+  return `data:${guessMimeFromFileName(imagePathOrUrl)};base64,${buffer.toString("base64")}`;
 }
 
 async function readImageBlob(imagePathOrUrl: string): Promise<{ blob: Blob; fileName: string }> {

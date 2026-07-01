@@ -46,11 +46,12 @@ export interface ThirdPartyProviderSummary {
   active: boolean;
   configured: boolean;
   enabled: boolean;
-  status: "needs_adapter" | "needs_config";
+  status: "available" | "needs_config";
   detail: string;
   keySource: "env" | "local-settings" | "none";
   baseUrl: string;
   model: string;
+  analysisModel: string;
 }
 
 export interface ProviderSettingsResponse {
@@ -129,6 +130,7 @@ export interface ProviderConfigUpdate {
   clearApiKey?: boolean;
   baseUrl?: string;
   model?: string;
+  analysisModel?: string;
 }
 
 export async function listJobs(): Promise<{ jobs: LocalGenerationJobManifest[] }> {
