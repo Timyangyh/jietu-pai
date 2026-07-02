@@ -15,6 +15,11 @@ export function buildGenerationPrompt(input: GeneratePortraitInput): string {
   const recipe = JSON.stringify(input.recipe, null, 2);
   const referenceFiles = input.referenceImagePathOrUrls.map(fileBaseName).join(", ");
   const subjectFiles = input.subjectImagePathOrUrls.map(fileBaseName).join(", ");
+  const referenceOrder = imageOrderLabel(1, input.referenceImagePathOrUrls.length);
+  const subjectOrder = imageOrderLabel(
+    input.referenceImagePathOrUrls.length + 1,
+    input.referenceImagePathOrUrls.length + input.subjectImagePathOrUrls.length
+  );
   return [
     "# Generation Job",
     "",
@@ -26,13 +31,19 @@ export function buildGenerationPrompt(input: GeneratePortraitInput): string {
     `- ${subjectFiles}：人物主体参考图`,
     "- recipe.json：结构化图片配方，仅作为补充约束",
     "",
+    "## 图片顺序与身份优先级",
+    "",
+    `- ${referenceOrder}（${referenceFiles}）：只用于摄影风格、姿势、身体角度、手部位置、光线、构图、色彩、服装氛围和场景关系；不得使用其中人物的脸、五官、脸型或身份。`,
+    `- ${subjectOrder}（${subjectFiles}）：人物身份唯一来源；必须优先保持其主要面部特征、脸型、发型方向和人物气质。`,
+    "- 当风格参考图和人物图冲突时，以人物图身份为准。",
+    "",
     "## 生成要求",
     "",
     `1. 输出 ${input.count} 张 ${input.recipe.generationParams.aspectRatio} 竖图，命名为 image-01.png、image-02.png。`,
     `2. 保持 ${subjectFiles} 的主要面部特征、发型方向和人物气质。`,
     `3. 参考 ${referenceFiles} 的人物姿势、身体角度、手部位置、光线、构图、色彩、服装氛围和场景关系。`,
     `4. 服装造型参考 recipe.outfit，但人脸身份以 ${subjectFiles} 为准。`,
-    `5. 不复制 ${referenceFiles} 中具体人物身份。`,
+    `5. 不复制 ${referenceFiles} 中具体人物身份、五官和脸型。`,
     "6. 避免露骨、冒充、侵权、水印、文字、畸形、多余肢体和明显换脸。",
     "",
     "## 图片配方",
@@ -89,4 +100,8 @@ export function summarizeRecipeForUi(recipe: StyleRecipe): string {
 function fileBaseName(value: string): string {
   const withoutQuery = value.split("?")[0] ?? value;
   return withoutQuery.split(/[\\/]/).pop() || value;
+}
+
+function imageOrderLabel(start: number, end: number): string {
+  return start === end ? `第 ${start} 张图` : `第 ${start}-${end} 张图`;
 }

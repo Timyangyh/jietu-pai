@@ -18,6 +18,9 @@ describe("buildGenerationPrompt", () => {
     expect(prompt).toContain("reference.png");
     expect(prompt).toContain("subject-01.png");
     expect(prompt).toContain("recipe.json");
+    expect(prompt).toContain("第 1 张图（reference.png）：只用于摄影风格");
+    expect(prompt).toContain("第 2 张图（subject-01.png）：人物身份唯一来源");
+    expect(prompt).toContain("以人物图身份为准");
     expect(prompt).toContain("不要复制");
   });
 });
