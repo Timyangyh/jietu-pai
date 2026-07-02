@@ -8,6 +8,7 @@
     "dev:extension": "pnpm --filter @styleme/extension dev",
     "build:extension": "pnpm --filter @styleme/extension build && tsx scripts/sync-extension-build.ts",
     "package:extension": "pnpm build:extension && tsx scripts/package-extension.ts",
+    "package:windows": "pnpm build:extension && tsx scripts/package-windows.ts",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "verify": "pnpm typecheck && pnpm test && pnpm build:extension",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@playwright/test": "^1.56.1",
     "@types/node": "^22.15.33",
+    "esbuild": "0.28.1",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

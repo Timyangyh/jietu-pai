@@ -12,6 +12,70 @@
 - 生成同风格图片
 - 在本地相册查看、下载、收藏、隐藏结果
 
+## Windows 下载使用
+
+适合不想在 Windows 上安装源码依赖或手动构建的用户。
+
+1. 打开 [Releases](https://github.com/Timyangyh/jietu-pai/releases)。
+2. 下载 `jietu-pai-windows-x64-v0.1.4.zip`。
+3. 解压整个 zip。
+4. 双击 `start-local-server.cmd`，保持服务窗口打开。
+5. Chrome 打开 `chrome://extensions`，开启“开发者模式”。
+6. 点击“加载已解压的扩展程序”。
+7. 选择解压目录里的 `app\chrome-extension` 文件夹。
+
+Windows 包包含已构建的 Chrome 插件、本地服务单文件包和官方 Windows x64 Node.js 运行时的 `node.exe`。它不包含 `.env`、`runs/`、Provider key、OAuth token、cookie、本地上传图片、生成图片或相册历史。
+
+运行后，本地数据会保存在解压目录的 `app\runs`。分享或重新打包时不要把 `app\runs` 发给别人。
+
+## 发布包
+
+当前发布版本：`v0.1.4`
+
+生成 Windows 用户包：
+
+```bash
+pnpm package:windows
+```
+
+输出文件：
+
+```text
+release-assets/jietu-pai-windows-x64-v0.1.4.zip
+release-assets/jietu-pai-windows-x64-v0.1.4.sha256.txt
+```
+
+生成 Chrome-only 插件包：
+
+```bash
+pnpm package:extension
+```
+
+输出文件：
+
+```text
+release-assets/jietu-pai-chrome-mv3.zip
+```
+
+Chrome-only 插件包只包含扩展前端，适合已有源码环境或自己启动本地服务的用户：
+
+1. 下载并解压 `jietu-pai-chrome-mv3.zip`。
+2. Chrome 打开 `chrome://extensions`。
+3. 开启开发者模式。
+4. 点击“加载已解压的扩展程序”。
+5. 选择解压后的 `chrome-mv3/` 文件夹。
+
+插件包只省去构建插件这一步。完整使用仍需要本地服务：
+
+```bash
+pnpm install
+pnpm start:server
+```
+
+`pnpm start:server` 会监听本地服务源码变化并自动重启服务进程。更新项目代码后不需要手动杀旧服务；如果是从旧版本升级到本机制，需要先重启一次本地服务。
+
+发布包不会包含 `.env`、`runs/`、本地任务历史、Provider 设置、相册记录、API key、token、本地上传图片或生成图片。打包脚本会检查这些本地私人数据，发现后会停止生成 zip。
+
 ## 源码安装
 
 ```bash
@@ -31,40 +95,13 @@ chrome://extensions -> 开发者模式 -> 加载已解压的扩展程序
 
 `pnpm build:extension` 会刷新根目录 `照样拍插件-本地加载版/`。这是 Chrome 加载用的插件前端目录。
 
-## 插件包
+### v0.1.4 更新
 
-当前插件包版本：`v0.1.3`
-
-生成可发布到 GitHub Release 的插件包：
-
-```bash
-pnpm package:extension
-```
-
-输出文件：
-
-```text
-release-assets/jietu-pai-chrome-mv3.zip
-```
-
-使用插件包：
-
-1. 下载并解压 `jietu-pai-chrome-mv3.zip`。
-2. Chrome 打开 `chrome://extensions`。
-3. 开启开发者模式。
-4. 点击“加载已解压的扩展程序”。
-5. 选择解压后的 `chrome-mv3/` 文件夹。
-
-插件包只省去构建插件这一步。完整使用仍需要本地服务：
-
-```bash
-pnpm install
-pnpm start:server
-```
-
-`pnpm start:server` 会监听本地服务源码变化并自动重启服务进程。更新项目代码后不需要手动杀旧服务；如果是从旧版本升级到本机制，需要先重启一次本地服务。
-
-插件包只包含 Chrome 扩展前端文件。它不会包含 `.env`、`runs/`、本地任务历史、Provider 设置、相册记录、API key、token、本地上传图片或生成图片。打包脚本会检查这些本地私人数据，发现后会停止生成 zip。
+| 类型 | 更新 |
+|---|---|
+| Windows 包 | 新增 `jietu-pai-windows-x64-v0.1.4.zip`，下载解压后可双击 `start-local-server.cmd` 启动本地服务 |
+| 本地服务 | 维护端服务脚本改为跨平台写法，避免 Windows 终端无法识别 Unix 环境变量赋值 |
+| 文档 | 首页新增 Windows 用户下载使用说明，并区分 Windows 包、Chrome-only 插件包和源码安装 |
 
 ### v0.1.3 更新
 

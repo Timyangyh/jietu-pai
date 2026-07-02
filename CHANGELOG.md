@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.4 - 2026-07-02
+
+- 新增 Windows x64 Release 便携包，包含已构建 Chrome 插件、本地服务单文件包和 Windows 启动脚本。
+- Windows 包内置官方 Node.js Windows x64 运行时的 `node.exe`，用户无需在 Windows 上构建源码。
+- 本地服务启动脚本改为跨平台写法，避免 Windows 终端无法识别 Unix 环境变量赋值。
+- 首页 README 新增 Windows 下载使用说明，并区分 Windows 包、Chrome-only 插件包和源码安装。
+
 ## v0.1.3 - 2026-07-01
 
 - UI 自动化验证完成后，自动隐藏并删除本次新增的 Mock 测试任务目录，避免测试占位图堆在相册和本地任务目录里。
