@@ -28,6 +28,27 @@ Windows 包包含已构建的 Chrome 插件、本地服务单文件包和官方 
 
 运行后，本地数据会保存在解压目录的 `app\runs`。分享或重新打包时不要把 `app\runs` 发给别人。
 
+## macOS 使用
+
+macOS 用户使用源码安装方式，需要先安装 Node.js 和 pnpm。本地服务和 Chrome 插件仍然都在本机运行，Provider key、上传图片、生成图片和相册历史不会进入插件包或仓库。
+
+```bash
+git clone https://github.com/Timyangyh/jietu-pai.git
+cd jietu-pai
+pnpm install
+pnpm build:extension
+pnpm start:server
+```
+
+Chrome 加载插件：
+
+```text
+chrome://extensions -> 开发者模式 -> 加载已解压的扩展程序
+选择：项目根目录下的 照样拍插件-本地加载版/
+```
+
+如果只下载 Chrome-only 插件包，也仍然需要在本机启动本地服务。
+
 ## 发布包
 
 当前发布版本：`v0.1.4`
