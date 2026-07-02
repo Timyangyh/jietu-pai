@@ -43,7 +43,7 @@ try {
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${fixturePort}/ordinary-image.html`);
   await page.locator("img").first().hover({ position: { x: 180, y: 200 } });
-  await shadowTestId(page, "select-reference").click();
+  await clickShadowTestId(page, "select-reference");
   await shadowTestId(page, "analyze-reference").click();
   await waitForShadowText(page, "图片配方", 8000);
 
@@ -91,6 +91,14 @@ async function waitForShadowText(page: Page, text: string, timeout: number): Pro
 
 function shadowTestId(page: Page, testId: string) {
   return page.locator(`styleme-local-overlay [data-testid="${testId}"]`);
+}
+
+async function clickShadowTestId(page: Page, testId: string): Promise<void> {
+  const target = shadowTestId(page, testId);
+  await target.waitFor({ state: "visible" });
+  const box = await target.boundingBox();
+  if (!box) throw new Error(`Could not locate ${testId} for UI verification.`);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 }
 
 async function ensureSubjectFixture(filePath: string): Promise<void> {

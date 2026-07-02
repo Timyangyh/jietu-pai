@@ -152,6 +152,7 @@ function StyleMeOverlay() {
   useEffect(() => {
     const handleMove = (event: MouseEvent) => {
       if (open) return;
+      if (isStyleMeOverlayTarget(event)) return;
       const candidate = detectReferenceCandidate(event.target);
       if (!candidate?.rect) {
         setHover(null);
@@ -1448,6 +1449,10 @@ function detectReferenceCandidate(target: EventTarget | null): ReferenceCandidat
   }
 
   return null;
+}
+
+function isStyleMeOverlayTarget(event: MouseEvent): boolean {
+  return event.composedPath().some((target) => target instanceof Element && target.localName === "styleme-local-overlay");
 }
 
 function parseCssUrl(value: string): string | undefined {
