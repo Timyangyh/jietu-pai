@@ -11,6 +11,9 @@ import type {
 } from "@styleme/core";
 import { DEFAULT_NEGATIVE_PROMPT, buildDefaultGenerationParams, buildRecipeFromHints, validateStyleRecipe } from "@styleme/core";
 
+const DEFAULT_CODEX_ANALYSIS_TIMEOUT_MS = 3 * 60 * 1000;
+const DEFAULT_CODEX_IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
+
 export class CodexAccountProvider implements ImageProvider {
   async analyzeStyle(imagePathOrUrls: string[]): Promise<StyleRecipe> {
     const imagePath = imagePathOrUrls[0];
@@ -35,7 +38,7 @@ export class CodexAccountProvider implements ImageProvider {
       ],
       cwd,
       prompt,
-      3 * 60 * 1000
+      codexAnalysisTimeoutMs()
     );
     try {
       return parseCodexRecipeOutput(`${result.stdout}\n${result.stderr}`, recipeId);
@@ -73,11 +76,14 @@ export class CodexAccountProvider implements ImageProvider {
       "-"
     ];
 
-    const result = await runCodex(args, jobDir, prompt, 8 * 60 * 1000);
+    const result = await runCodex(args, jobDir, prompt, codexImageTimeoutMs());
     await fs.writeFile(
       path.join(jobDir, "codex-cli-run.log"),
       [
         `exitCode=${result.exitCode}`,
+        `signal=${result.signal ?? ""}`,
+        `timedOut=${result.timedOut}`,
+        `timeoutMs=${result.timeoutMs}`,
         "",
         "STDOUT:",
         result.stdout,
@@ -126,6 +132,9 @@ export class CodexAccountProvider implements ImageProvider {
 
 interface CodexRunResult {
   exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  timeoutMs: number;
   stdout: string;
   stderr: string;
 }
@@ -206,7 +215,9 @@ function runCodex(args: string[], cwd: string, stdin: string, timeoutMs: number)
     });
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
     }, timeoutMs);
 
@@ -219,11 +230,11 @@ function runCodex(args: string[], cwd: string, stdin: string, timeoutMs: number)
     child.stdin.end(stdin);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ exitCode: 1, stdout, stderr: `${stderr}\n${error.message}` });
+      resolve({ exitCode: 1, signal: null, timedOut, timeoutMs, stdout, stderr: `${stderr}\n${error.message}` });
     });
-    child.on("close", (exitCode) => {
+    child.on("close", (exitCode, signal) => {
       clearTimeout(timer);
-      resolve({ exitCode, stdout, stderr });
+      resolve({ exitCode, signal, timedOut, timeoutMs, stdout, stderr });
     });
   });
 }
@@ -273,12 +284,39 @@ function summarizeCodexFailure(result: CodexRunResult): string {
     .filter(Boolean)
     .slice(-8)
     .join(" ");
+  if (result.timedOut) {
+    return `Codex CLI 超时（${formatDuration(result.timeoutMs)}），未保存 PNG。`;
+  }
   if (result.exitCode === null) {
-    return "Codex CLI 超时或被终止，未保存 PNG。";
+    return result.signal ? `Codex CLI 被 ${result.signal} 终止，未保存 PNG。` : "Codex CLI 被终止，未保存 PNG。";
   }
   return text
     ? `Codex CLI 未保存 PNG。退出码 ${result.exitCode}。${text}`
     : `Codex CLI 未保存 PNG。退出码 ${result.exitCode}。`;
+}
+
+function codexAnalysisTimeoutMs(): number {
+  return readTimeoutMs("STYLEME_CODEX_ANALYSIS_TIMEOUT_MS", DEFAULT_CODEX_ANALYSIS_TIMEOUT_MS);
+}
+
+function codexImageTimeoutMs(): number {
+  return readTimeoutMs("STYLEME_CODEX_IMAGE_TIMEOUT_MS", DEFAULT_CODEX_IMAGE_TIMEOUT_MS);
+}
+
+function readTimeoutMs(envName: string, fallback: number): number {
+  const raw = process.env[envName]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.ceil(ms / 1000);
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest > 0 ? `${minutes}分${String(rest).padStart(2, "0")}秒` : `${minutes}分钟`;
 }
 
 function stripAnsi(value: string): string {
